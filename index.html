@@ -286,22 +286,98 @@ function verBoletim(id){
 /* ============ ESCALA DO DIA ============ */
 RENDER.escala = ()=>{
   const d = window.__escalaData || hoje();
-  const list = db.viagens.filter(v=>v.data===d && v.status!=="cancelada")
-    .sort((a,b)=>a.horaSaida.localeCompare(b.horaSaida));
+  const rots = db.roteiros.filter(r=>r.status==="ativo");
+  const motAtivos = db.motoristas.filter(m=>m.status==="ativo");
+  // boletins já existentes nesta data (por roteiro)
+  const existentes = {};
+  db.viagens.filter(v=>v.data===d && v.status!=="cancelada").forEach(v=>{ existentes[v.roteiroId]=v; });
+  const motOpts = ()=> `<option value="">— não escalar —</option>`+
+    motAtivos.map(m=>`<option value="${m.id}">${esc(m.nome)}${m.veiculoId?" ("+esc(placaVec(m.veiculoId))+")":""}</option>`).join("");
+  const rows = rots.map(r=>{
+    const ex = existentes[r.id];
+    const pax = db.funcionarios.filter(f=>f.rotaId===r.id && f.status==="ativo").length;
+    if(ex){
+      const vec=DB.veiculo(db,ex.veiculoId); const cap=vec?vec.capacidade:7;
+      return `<tr>
+        <td><b>${esc(r.nome)}</b></td>
+        <td class="mono">${ex.horaSaida}</td>
+        <td>${esc(nomeMot(ex.motoristaId))}</td>
+        <td class="mono">${esc(placaVec(ex.veiculoId))}</td>
+        <td class="num">${ex.passageiros}/${cap}</td>
+        <td>${badgeStatus(ex.status)} <span class="mono muted" style="font-size:11px">#${ex.boletim}</span></td>
+      </tr>`;
+    }
+    return `<tr>
+      <td><b>${esc(r.nome)}</b></td>
+      <td><input type="time" id="es_hora_${r.id}" value="06:00" style="width:112px"></td>
+      <td><select id="es_mot_${r.id}">${motOpts()}</select></td>
+      <td class="muted" style="font-size:11px">veículo do motorista</td>
+      <td class="num">${pax||'<span class="muted">0</span>'}</td>
+      <td><span class="badge gray">não escalado</span></td>
+    </tr>`;
+  }).join("");
   $("#view").innerHTML=`
+    <div class="pagehd"><h2>Escala do dia</h2><div class="spacer"></div>
+      <label class="row" style="gap:6px;font-size:13px;font-weight:600"><input type="checkbox" id="es_semana" style="width:auto"> repetir seg–sex</label>
+      <button class="btn pri" onclick="gerarEscala()">Gerar escala</button></div>
     <div class="pill-filter">
       <label class="fld" style="margin:0"><span>Data da escala</span>
         <input type="date" id="escData" value="${d}" onchange="window.__escalaData=this.value;RENDER.escala()"></label>
     </div>
+    <div class="hint" style="margin-bottom:12px">Escolha o motorista de cada roteiro e clique em <b>Gerar escala</b>. O veículo vem do motorista e os passageiros dos funcionários da rota. Cada roteiro escalado vira um boletim. Marque <b>repetir seg–sex</b> para programar a semana inteira.</div>
     <div class="card"><div class="bd" style="padding:0">
-    ${list.length?`<table><thead><tr><th>Horário</th><th>Roteiro</th><th>Motorista</th><th>Veículo</th><th>Placa</th><th class="num">Ocupação</th><th>Status</th></tr></thead>
-    <tbody>${list.map(v=>{ const vec=DB.veiculo(db,v.veiculoId); const cap=vec?vec.capacidade:7;
-      return `<tr><td class="mono">${v.horaSaida}</td><td><b>${esc(v.roteiroNome)}</b></td>
-      <td>${esc(nomeMot(v.motoristaId))}</td><td>${esc(vec?vec.modelo:"—")}</td><td class="mono">${esc(placaVec(v.veiculoId))}</td>
-      <td class="num">${v.passageiros}/${cap}</td><td>${badgeStatus(v.status)}</td></tr>`;}).join("")}</tbody></table>`
-    :`<div class="empty"><div class="big">▦</div>Nenhuma viagem escalada para esta data.</div>`}
+    ${rots.length?`<table><thead><tr><th>Roteiro</th><th>Horário</th><th>Motorista</th><th>Veículo</th><th class="num">Pax</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`
+    :`<div class="empty"><div class="big">▦</div>Nenhum roteiro ativo. Cadastre um roteiro primeiro.</div>`}
     </div></div>`;
 };
+function semanaUteis(d){
+  const base=new Date(d+"T00:00:00"); const dow=base.getDay(); // 0=domingo
+  const seg=new Date(base); seg.setDate(base.getDate()-((dow+6)%7)); // segunda desta semana
+  const out=[]; for(let i=0;i<5;i++){ const x=new Date(seg); x.setDate(seg.getDate()+i); out.push(x.toISOString().slice(0,10)); }
+  return out;
+}
+function gerarBoletimEscala(r, motoristaId, data, saida){
+  const mot=DB.motorista(db,motoristaId); const vec=mot?DB.veiculo(db,mot.veiculoId):null;
+  if(!vec) return {erro:`${r.nome}: ${mot?mot.nome:"motorista"} sem veículo vinculado`};
+  const dup=db.viagens.find(v=>v.roteiroId===r.id && v.data===data && v.status!=="cancelada");
+  if(dup) return {dup:true};
+  const conflito=db.viagens.find(v=>v.motoristaId===motoristaId && v.data===data && v.horaSaida===saida && v.status!=="cancelada");
+  if(conflito) return {erro:`${nomeMot(motoristaId)} já tem viagem em ${data.split("-").reverse().join("/")} às ${saida}`};
+  const funcs=db.funcionarios.filter(f=>f.rotaId===r.id && f.status==="ativo");
+  if(funcs.length>vec.capacidade) return {erro:`${r.nome}: ${funcs.length} passageiros acima da capacidade (${vec.capacidade})`};
+  const km=DB.calcularKmRota(r,{});
+  const corrida=DB.valorCorrida(r,km);
+  db.viagens.push({ id:DB.uid("via"), boletim:DB.gerarNumeroBoletim(db), data, empresaId:r.empresaId,
+    roteiroId:r.id, roteiroNome:r.nome, motoristaId, veiculoId:vec.id, sentido:"ida_volta",
+    origem:r.origem, destino:r.destino, horaSaida:saida, horaChegada:"",
+    passageiros:funcs.length, kmPrevisto:km, kmInicial:null, kmFinal:null, kmRealizado:km, motivoDesvio:"",
+    valorCorrida:corrida, pedagio:num(r.pedagioPadrao), estacionamento:0, hora:0, outros:0,
+    total:corrida+num(r.pedagioPadrao),
+    embarques:funcs.map(x=>({funcionarioId:x.id,nome:x.nome,endereco:x.endereco,status:"aguardando"})),
+    status:"programada" });
+  return {ok:true};
+}
+function gerarEscala(){
+  const d = window.__escalaData || hoje();
+  const datas = $("#es_semana") && $("#es_semana").checked ? semanaUteis(d) : [d];
+  let criados=0, pulados=0; const erros=[];
+  db.roteiros.filter(r=>r.status==="ativo").forEach(r=>{
+    const motEl=$("#es_mot_"+r.id); if(!motEl) return;         // já escalado
+    const motoristaId=motEl.value; if(!motoristaId) return;    // "não escalar"
+    const saida=($("#es_hora_"+r.id)||{}).value||"06:00";
+    datas.forEach(data=>{
+      const res=gerarBoletimEscala(r, motoristaId, data, saida);
+      if(res.ok) criados++; else if(res.dup) pulados++; else if(res.erro) erros.push(res.erro);
+    });
+  });
+  if(criados){ DB.save(db); DB.log(db,"Escala gerada", `${criados} viagem(ns) em ${datas.length} dia(s)`); }
+  let msg = criados ? `${criados} viagem(ns) criada(s)` : "Nada a gerar";
+  if(pulados) msg += ` · ${pulados} já existiam`;
+  toast(msg, criados?"ok":"err");
+  if(erros.length) modal("Avisos da escala", erros.map(e=>`<div style="margin-bottom:6px">⚠ ${esc(e)}</div>`).join(""), [{label:"Entendi"}]);
+  RENDER.escala();
+}
+
 
 /* ============ SOLICITAÇÕES ============ */
 RENDER.solic = ()=>{
