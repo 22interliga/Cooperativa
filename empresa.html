@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoopVia — Empresa</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#14181f">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <aside class="side" id="side">
+    <div class="brand"><div class="logo">C</div><div><b>CoopVia</b><small id="empName">Empresa</small></div></div>
+    <nav class="nav" id="nav"></nav>
+    <div class="foot">
+      <div class="who"><b id="whoName">—</b><span class="muted">Portal da empresa</span></div>
+      <button class="btn ghost sm block" style="color:#cfd6e0;border-color:#303945" onclick="Auth.logout()">Sair</button>
+    </div>
+  </aside>
+  <main class="work">
+    <div class="topbar"><button class="menu-btn" id="menuBtn">☰</button>
+      <div><h1 id="ptitle">Painel</h1><div class="sub" id="psub"></div></div></div>
+    <div class="wrap" id="view"></div>
+  </main>
+</div>
+<script src="db.js"></script>
+<script src="ui.js"></script>
+<script>
+const { $, $$, esc, toast, modal, confirm, bindMenu } = UI;
+const { BRL, num, hoje } = DB;
+let db, EMP;
+const U = Auth.require(["empresa"]);
+if (U) init();
+
+function init(){
+  db = DB.get();
+  EMP = db.empresas.find(e=>e.id===U.empresaId);
+  $("#empName").textContent = EMP?EMP.nome:"Empresa";
+  $("#whoName").textContent = U.nome;
+  bindMenu();
+  const nav=[["dash","◈","Meu painel"],["func","⋮","Funcionários"],["viagens","▤","Viagens realizadas"],["solic","✉","Solicitações"],["fatur","$","Faturamento"]];
+  $("#nav").innerHTML=`<div class="nav-label">${esc(EMP.nome)}</div>`+nav.map(n=>`<a data-go="${n[0]}"><span class="ic">${n[1]}</span>${n[2]}</a>`).join("");
+  $$("#nav a").forEach(a=>a.onclick=()=>{ go(a.dataset.go); $("#side").classList.remove("open"); });
+  go("dash");
+}
+// tudo filtrado pelo CNPJ da própria empresa
+const meusFunc = ()=>db.funcionarios.filter(f=>f.empresaId===U.empresaId);
+const minhasViagens = ()=>db.viagens.filter(v=>v.empresaId===U.empresaId);
+const minhasSolic = ()=>db.solicitacoes.filter(s=>s.empresaId===U.empresaId);
+
+function go(id){
+  $$("#nav a").forEach(a=>a.classList.toggle("on",a.dataset.go===id));
+  const t={dash:"Meu painel",func:"Funcionários",viagens:"Viagens realizadas",solic:"Solicitações",fatur:"Faturamento"};
+  $("#ptitle").textContent=t[id];
+  $("#psub").textContent={dash:"Utilização do transporte da sua empresa",func:"Quem usa o transporte",viagens:"Histórico de viagens da sua empresa",solic:"Peça inclusões e alterações à cooperativa",fatur:"O que você contratou e o que foi utilizado"}[id]||"";
+  db=DB.get(); R[id]();
+}
+const badgeStatus=(s)=>{const m={ativo:["green","Ativo"],suspenso:["amber","Suspenso"],inativo:["gray","Inativo"],pendente:["amber","Pendente"],aprovada:["green","Aprovada"],recusada:["red","Recusada"],concluida:["green","Concluída"],programada:["blue","Programada"],cancelada:["red","Cancelada"]};const[c,l]=m[s]||["gray",s];return `<span class="badge ${c}"><span class="dot"></span>${l}</span>`;};
+const R={};
+
+R.dash=()=>{
+  const d=hoje();
+  const func=meusFunc();
+  const ativos=func.filter(f=>f.status==="ativo").length;
+  const comRota=func.filter(f=>f.rotaId).length;
+  const vHoje=minhasViagens().filter(v=>v.data===d);
+  const vFeitas=minhasViagens().filter(v=>v.status==="concluida").length;
+  const solPend=minhasSolic().filter(s=>s.status==="pendente").length;
+  // faltas = ausências registradas nos embarques
+  const faltas=minhasViagens().reduce((a,v)=>a+(v.embarques||[]).filter(e=>e.status==="ausente").length,0);
+  const kpi=(lb,vl,cls="")=>`<div class="card kpi"><div class="lb">${lb}</div><div class="vl ${cls}">${vl}</div></div>`;
+  $("#view").innerHTML=`
+    <div class="grid g4" style="margin-bottom:16px">
+      ${kpi("Funcionários ativos",ativos)}${kpi("Usando transporte",comRota,"blue")}
+      ${kpi("Viagens realizadas",vFeitas,"green")}${kpi("Faltas registradas",faltas,faltas?"red":"")}</div>
+    <div class="grid g2">
+      <div class="card"><div class="hd"><h3>Viagens de hoje</h3></div><div class="bd" style="padding:0">
+        ${vHoje.length?`<table><thead><tr><th>Roteiro</th><th>Saída</th><th class="num">Pax</th><th>Status</th></tr></thead><tbody>${vHoje.map(v=>`<tr><td><b>${esc(v.roteiroNome)}</b></td><td class="mono">${v.horaSaida}</td><td class="num">${v.passageiros}</td><td>${badgeStatus(v.status)}</td></tr>`).join("")}</tbody></table>`:`<div class="empty"><div class="big">◈</div>Nenhuma viagem hoje.</div>`}
+      </div></div>
+      <div class="card"><div class="hd"><h3>Solicitações</h3><div class="spacer"></div><button class="btn pri sm" onclick="go('solic')">Nova</button></div>
+        <div class="bd">${solPend?`<div class="money-lg" style="color:var(--amber-d)">${solPend}</div><div class="muted">aguardando análise da cooperativa</div>`:`<div class="muted">Nenhuma solicitação pendente.</div>`}</div></div>
+    </div>`;
+};
+
+R.func=()=>{
+  const func=meusFunc();
+  $("#view").innerHTML=`
+    <div class="pagehd"><h2>Funcionários</h2><div class="spacer"></div>
+      <button class="btn pri" onclick="formFunc()">+ Cadastrar funcionário</button></div>
+    <div class="hint" style="margin-bottom:14px">Você cadastra o funcionário e o local de embarque. A cooperativa organiza a rota e o motorista — você não precisa se preocupar com isso.</div>
+    <div class="card"><div class="bd" style="padding:0">
+    ${func.length?`<table><thead><tr><th>Nome</th><th>Matrícula</th><th>Embarque</th><th>Entrada</th><th>Saída</th><th>Status</th><th></th></tr></thead>
+    <tbody>${func.map(f=>`<tr><td><b>${esc(f.nome)}</b></td><td class="mono">${esc(f.matricula)}</td><td>${esc(f.endereco)}</td>
+      <td class="mono">${f.horaEntrada}</td><td class="mono">${f.horaSaida}</td><td>${badgeStatus(f.status)}</td>
+      <td><button class="btn sm ghost" onclick="formFunc('${f.id}')">Editar</button></td></tr>`).join("")}</tbody></table>`
+    :`<div class="empty"><div class="big">⋮</div>Nenhum funcionário cadastrado.</div>`}
+    </div></div>`;
+};
+function formFunc(id){
+  const o=id?meusFunc().find(x=>x.id===id):{};
+  const g=(f,v)=>o[f]??v??"";
+  const body=`
+    <div class="frow"><label class="fld"><span>Nome completo</span><input id="f_nome" value="${esc(g('nome'))}"></label>
+      <label class="fld"><span>CPF</span><input id="f_cpf" value="${esc(g('cpf'))}"></label></div>
+    <div class="frow"><label class="fld"><span>Telefone</span><input id="f_tel" value="${esc(g('telefone'))}"></label>
+      <label class="fld"><span>Matrícula</span><input id="f_mat" value="${esc(g('matricula'))}"></label></div>
+    <label class="fld"><span>Endereço de embarque</span><input id="f_end" value="${esc(g('endereco'))}"></label>
+    <label class="fld"><span>Ponto de referência</span><input id="f_ref" value="${esc(g('referencia'))}"></label>
+    <div class="frow"><label class="fld"><span>Destino</span><input id="f_dest" value="${esc(g('destino',EMP.nome))}"></label>
+      <label class="fld"><span>Setor</span><input id="f_set" value="${esc(g('setor'))}"></label></div>
+    <div class="frow g3"><label class="fld"><span>Hora entrada</span><input type="time" id="f_ent" value="${g('horaEntrada','07:00')}"></label>
+      <label class="fld"><span>Hora saída</span><input type="time" id="f_sai" value="${g('horaSaida','17:00')}"></label>
+      <label class="fld"><span>Status</span><select id="f_st"><option value="ativo" ${g('status')==='ativo'?'selected':''}>Ativo</option><option value="suspenso" ${g('status')==='suspenso'?'selected':''}>Suspenso</option></select></label></div>`;
+  modal(id?"Editar funcionário":"Novo funcionário", body, [
+    {label:"Cancelar"},{label:"Salvar", cls:"pri", onClick:()=>{
+      const rec=o.id?o:{id:DB.uid("fun"),empresaId:U.empresaId,rotaId:null,dias:"Seg a Sex",tipo:"Ida e volta"};
+      rec.nome=$("#f_nome").value; rec.cpf=$("#f_cpf").value; rec.telefone=$("#f_tel").value; rec.matricula=$("#f_mat").value;
+      rec.endereco=$("#f_end").value; rec.referencia=$("#f_ref").value; rec.destino=$("#f_dest").value; rec.setor=$("#f_set").value;
+      rec.horaEntrada=$("#f_ent").value; rec.horaSaida=$("#f_sai").value; rec.status=$("#f_st").value;
+      if(!o.id){ rec.status="ativo"; db.funcionarios.push(rec);
+        db.solicitacoes.push({id:DB.uid("sol"),empresaId:U.empresaId,tipo:"Novo funcionário",descricao:`Incluir ${rec.nome} (embarque: ${rec.endereco})`,data:hoje(),status:"pendente"});
+        toast("Funcionário cadastrado — solicitação enviada à cooperativa");
+      } else toast("Funcionário atualizado");
+      DB.save(db); R.func();
+    }}
+  ], {wide:true});
+}
+
+R.viagens=()=>{
+  const list=[...minhasViagens()].sort((a,b)=>b.data.localeCompare(a.data));
+  $("#view").innerHTML=`
+    <div class="pagehd"><h2>Viagens realizadas</h2></div>
+    <div class="card"><div class="bd" style="padding:0">
+    ${list.length?`<table><thead><tr><th>Data</th><th>Roteiro</th><th>Saída</th><th class="num">Passageiros</th><th>Status</th></tr></thead>
+    <tbody>${list.map(v=>`<tr><td class="mono">${v.data.split("-").reverse().join("/")}</td><td><b>${esc(v.roteiroNome)}</b></td>
+      <td class="mono">${v.horaSaida}</td><td class="num">${v.passageiros}</td><td>${badgeStatus(v.status)}</td></tr>`).join("")}</tbody></table>`
+    :`<div class="empty"><div class="big">▤</div>Nenhuma viagem registrada.</div>`}
+    </div></div>
+    <div class="hint" style="margin-top:12px">Você vê a utilização do serviço. Valores pagos a motoristas e custos internos da cooperativa não aparecem aqui.</div>`;
+};
+
+R.solic=()=>{
+  const tipos=["Novo funcionário","Alteração de endereço","Alteração de horário","Inclusão em rota","Retirada de rota","Suspensão temporária","Retorno ao transporte"];
+  const list=[...minhasSolic()].sort((a,b)=>(b.data||"").localeCompare(a.data||""));
+  $("#view").innerHTML=`
+    <div class="pagehd"><h2>Solicitações de transporte</h2><div class="spacer"></div>
+      <button class="btn pri" onclick="novaSolic()">+ Abrir solicitação</button></div>
+    <div class="card"><div class="bd" style="padding:0">
+    ${list.length?`<table><thead><tr><th>Tipo</th><th>Descrição</th><th>Data</th><th>Status</th></tr></thead>
+    <tbody>${list.map(s=>`<tr><td><b>${esc(s.tipo)}</b></td><td>${esc(s.descricao)}</td><td class="mono">${(s.data||"").split("-").reverse().join("/")}</td><td>${badgeStatus(s.status)}</td></tr>`).join("")}</tbody></table>`
+    :`<div class="empty"><div class="big">✉</div>Nenhuma solicitação aberta.</div>`}
+    </div></div>`;
+  window.__tipos=tipos;
+};
+function novaSolic(){
+  const opts=window.__tipos.map(t=>`<option>${t}</option>`).join("");
+  modal("Abrir solicitação",`
+    <label class="fld"><span>Tipo</span><select id="s_tipo">${opts}</select></label>
+    <label class="fld"><span>Descrição</span><textarea id="s_desc" rows="3" placeholder="Descreva o que precisa..."></textarea></label>
+    <div class="hint">A solicitação vai para a cooperativa analisar e aprovar.</div>`,
+    [{label:"Cancelar"},{label:"Enviar", cls:"pri", onClick:()=>{
+      const desc=$("#s_desc").value.trim(); if(!desc){toast("Descreva a solicitação","err");return false;}
+      db.solicitacoes.push({id:DB.uid("sol"),empresaId:U.empresaId,tipo:$("#s_tipo").value,descricao:desc,data:hoje(),status:"pendente"});
+      DB.save(db); toast("Solicitação enviada"); R.solic();
+    }}]);
+}
+
+R.fatur=()=>{
+  const func=meusFunc().filter(f=>f.status==="ativo").length;
+  const vFeitas=minhasViagens().filter(v=>v.status==="concluida").length;
+  // faturamento na ótica da EMPRESA — valor contratado, não custo interno
+  const valorFuncionario = 320; // demo: valor mensal por funcionário contratado
+  const valorContratado = func*valorFuncionario;
+  $("#view").innerHTML=`
+    <div class="pagehd"><h2>Faturamento</h2></div>
+    <div class="grid g3" style="margin-bottom:16px">
+      <div class="card kpi"><div class="lb">Funcionários contratados</div><div class="vl">${func}</div></div>
+      <div class="card kpi"><div class="lb">Viagens no período</div><div class="vl blue">${vFeitas}</div></div>
+      <div class="card kpi"><div class="lb">Valor contratado / mês</div><div class="vl amber">${BRL(valorContratado)}</div></div>
+    </div>
+    <div class="card"><div class="hd"><h3>Modelo de cobrança</h3></div><div class="bd">
+      <table><tbody>
+        <tr><th>Empresa</th><td>${esc(EMP.nome)}</td></tr>
+        <tr><th>CNPJ</th><td class="mono">${esc(EMP.cnpj)}</td></tr>
+        <tr><th>Modelo</th><td>Valor mensal por funcionário — ${BRL(valorFuncionario)}/funcionário</td></tr>
+        <tr><th>Funcionários ativos</th><td>${func}</td></tr>
+        <tr><th>Total do mês</th><td><b class="money-lg" style="font-size:18px">${BRL(valorContratado)}</b></td></tr>
+      </tbody></table>
+    </div></div>`;
+};
+</script>
+<script>if("serviceWorker" in navigator){navigator.serviceWorker.register("sw.js").catch(()=>{});}</script>
+</body>
+</html>

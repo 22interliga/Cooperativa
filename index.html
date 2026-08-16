@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoopVia — Cooperativa</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#14181f">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <aside class="side" id="side">
+    <div class="brand"><div class="logo">C</div><div><b>CoopVia</b><small>Cooperativa</small></div></div>
+    <nav class="nav" id="nav"></nav>
+    <div class="foot">
+      <div class="who"><b id="whoName">—</b><span id="whoRole" class="muted"></span></div>
+      <button class="btn ghost sm block" style="color:#cfd6e0;border-color:#303945" onclick="Auth.logout()">Sair</button>
+    </div>
+  </aside>
+  <main class="work">
+    <div class="topbar">
+      <button class="menu-btn" id="menuBtn">☰</button>
+      <div><h1 id="ptitle">Painel</h1><div class="sub" id="psub"></div></div>
+      <div class="spacer"></div>
+      <button class="btn sm ghost noprint" onclick="resetDemo()" title="Recarregar dados demo">↻ Demo</button>
+    </div>
+    <div class="wrap" id="view"></div>
+  </main>
+</div>
+<script src="db.js"></script>
+<script src="ui.js"></script>
+<script>
+const { $, $$, esc, toast, modal, closeModal, confirm, bindMenu } = UI;
+const { BRL, num, hoje } = DB;
+let db;
+const U = Auth.require(["admin","operador","financeiro"]);
+if (U) init();
+
+function init(){
+  db = DB.get();
+  $("#whoName").textContent = U.nome;
+  $("#whoRole").textContent = ({admin:"Administrador",operador:"Operador",financeiro:"Financeiro"})[U.papel]||U.papel;
+  bindMenu();
+  buildNav();
+  const start = U.papel==="financeiro" ? "fechamento" : "dash";
+  go(start);
+}
+
+/* ---------------- navegação ---------------- */
+const PAGES = [
+  { id:"dash", grp:"Operação", ic:"◈", label:"Painel de hoje", roles:["admin","operador","financeiro"] },
+  { id:"boletins", grp:"Operação", ic:"▤", label:"Boletins / Viagens", roles:["admin","operador"] },
+  { id:"escala", grp:"Operação", ic:"▦", label:"Escala do dia", roles:["admin","operador"] },
+  { id:"solic", grp:"Operação", ic:"✉", label:"Solicitações", roles:["admin","operador"] },
+  { id:"fechamento", grp:"Financeiro", ic:"$", label:"Fechamento & Recibo", roles:["admin","financeiro"] },
+  { id:"rentab", grp:"Financeiro", ic:"▲", label:"Rentabilidade", roles:["admin","financeiro"] },
+  { id:"roteiros", grp:"Cadastros", ic:"⇄", label:"Roteiros", roles:["admin","operador"] },
+  { id:"empresas", grp:"Cadastros", ic:"▣", label:"Empresas", roles:["admin"] },
+  { id:"motoristas", grp:"Cadastros", ic:"☺", label:"Motoristas", roles:["admin","operador"] },
+  { id:"veiculos", grp:"Cadastros", ic:"▬", label:"Veículos", roles:["admin","operador"] },
+  { id:"funcionarios", grp:"Cadastros", ic:"⋮", label:"Funcionários", roles:["admin","operador"] },
+  { id:"auditoria", grp:"Sistema", ic:"❐", label:"Auditoria", roles:["admin"] },
+];
+function buildNav(){
+  const mine = PAGES.filter(p=>p.roles.includes(U.papel));
+  let html="", grp=null;
+  mine.forEach(p=>{
+    if(p.grp!==grp){ grp=p.grp; html+=`<div class="nav-label">${grp}</div>`; }
+    html+=`<a data-go="${p.id}"><span class="ic">${p.ic}</span>${p.label}</a>`;
+  });
+  $("#nav").innerHTML=html;
+  $$("#nav a").forEach(a=>a.onclick=()=>{ go(a.dataset.go); $("#side").classList.remove("open"); });
+}
+function go(id){
+  const p = PAGES.find(x=>x.id===id) || PAGES[0];
+  $$("#nav a").forEach(a=>a.classList.toggle("on", a.dataset.go===p.id));
+  $("#ptitle").textContent = p.label;
+  $("#psub").textContent = { dash:"Operação em tempo real", boletins:"Cada viagem gera um boletim",
+    escala:"Programação diária de veículos e motoristas", fechamento:"Produção e recibo do motorista",
+    rentab:"Receita da rota × custo operacional", solic:"Pedidos das empresas contratantes" }[p.id]||"";
+  db = DB.get();
+  RENDER[p.id]();
+}
+function resetDemo(){ confirm("Recarregar os dados de demonstração? Tudo que você criou será perdido.", ()=>{ DB.reset(); db=DB.get(); toast("Dados demo recarregados"); go("dash"); }, "Recarregar"); }
+
+/* ---------------- helpers de render ---------------- */
+const badgeStatus = (s)=>{
+  const map={ disponivel:["green","Disponível"], em_viagem:["blue","Em viagem"], manutencao:["amber","Manutenção"],
+    indisponivel:["gray","Indisponível"], ativo:["green","Ativo"], inativo:["gray","Inativo"],
+    suspenso:["amber","Suspenso"], programada:["blue","Programada"], andamento:["amber","Em andamento"],
+    concluida:["green","Concluída"], cancelada:["red","Cancelada"], pendente:["amber","Pendente"],
+    aprovada:["green","Aprovada"], recusada:["red","Recusada"] };
+  const [c,l]=map[s]||["gray",s]; return `<span class="badge ${c}"><span class="dot"></span>${l}</span>`;
+};
+const nomeMot=(id)=>{ const m=DB.motorista(db,id); return m?m.nome:"—"; };
+const nomeVec=(id)=>{ const v=DB.veiculo(db,id); return v?`${v.modelo} ${v.placa}`:"—"; };
+const nomeEmp=(id)=>{ const e=DB.empresa(db,id); return e?e.nome:"—"; };
+const placaVec=(id)=>{ const v=DB.veiculo(db,id); return v?v.placa:"—"; };
+
+const RENDER = {};
+
+/* ============ DASHBOARD — Operação de hoje ============ */
+RENDER.dash = ()=>{
+  const d=hoje();
+  const hojeV = db.viagens.filter(v=>v.data===d);
+  const prog = hojeV.filter(v=>v.status==="programada").length;
+  const and  = hojeV.filter(v=>v.status==="andamento").length;
+  const conc = hojeV.filter(v=>v.status==="concluida").length;
+  const canc = hojeV.filter(v=>v.status==="cancelada").length;
+  const kmPrev = hojeV.reduce((a,v)=>a+num(v.kmPrevisto),0);
+  const kmReal = hojeV.reduce((a,v)=>a+num(v.kmRealizado),0);
+  const paxProg = hojeV.reduce((a,v)=>a+num(v.passageiros),0);
+  const motDisp = db.motoristas.filter(m=>m.status==="ativo").length;
+  const vecDisp = db.veiculos.filter(v=>v.status==="disponivel").length;
+  const vecMan  = db.veiculos.filter(v=>v.status==="manutencao").length;
+
+  const kpi=(lb,vl,cls="",ft="")=>`<div class="card kpi"><div class="lb">${lb}</div><div class="vl ${cls}">${vl}</div>${ft?`<div class="ft">${ft}</div>`:""}</div>`;
+
+  $("#view").innerHTML = `
+    <div class="grid g4" style="margin-bottom:16px">
+      ${kpi("Programadas", prog, "blue")}
+      ${kpi("Em andamento", and, "amber")}
+      ${kpi("Concluídas", conc, "green")}
+      ${kpi("Canceladas", canc, "red")}
+    </div>
+    <div class="grid g4" style="margin-bottom:16px">
+      ${kpi("Motoristas ativos", motDisp)}
+      ${kpi("Veículos disponíveis", vecDisp, "", vecMan?`${vecMan} em manutenção`:"")}
+      ${kpi("Passageiros do dia", paxProg)}
+      ${kpi("KM previsto / realizado", `${kmPrev} / ${kmReal}`, "amber", "km")}
+    </div>
+    <div class="card">
+      <div class="hd"><h3>Viagens de hoje — ${d.split("-").reverse().join("/")}</h3><div class="spacer"></div>
+        <button class="btn pri sm" onclick="go('boletins')">+ Novo boletim</button></div>
+      <div class="bd" style="padding:0">
+        ${hojeV.length? tabelaViagens(hojeV) : `<div class="empty"><div class="big">◈</div>Nenhuma viagem programada para hoje.</div>`}
+      </div>
+    </div>`;
+};
+
+function tabelaViagens(list){
+  return `<table><thead><tr>
+    <th>Boletim</th><th>Roteiro</th><th>Empresa</th><th>Motorista</th><th>Veículo</th>
+    <th class="num">Pax</th><th class="num">KM prev</th><th class="num">Total</th><th>Status</th><th></th>
+  </tr></thead><tbody>${list.map(v=>`<tr>
+    <td class="mono">${v.boletim}</td>
+    <td><b>${esc(v.roteiroNome)}</b></td>
+    <td>${esc(nomeEmp(v.empresaId))}</td>
+    <td>${esc(nomeMot(v.motoristaId))}</td>
+    <td>${esc(nomeVec(v.veiculoId))}</td>
+    <td class="num">${v.passageiros}</td>
+    <td class="num">${v.kmPrevisto}</td>
+    <td class="num">${BRL(v.total)}</td>
+    <td>${badgeStatus(v.status)}</td>
+    <td><button class="btn sm ghost" onclick="verBoletim('${v.id}')">Abrir</button></td>
+  </tr>`).join("")}</tbody></table>`;
+}
+
+/* ============ BOLETINS / VIAGENS ============ */
+RENDER.boletins = ()=>{
+  const list=[...db.viagens].sort((a,b)=>b.data.localeCompare(a.data)||num(b.boletim)-num(a.boletim));
+  $("#view").innerHTML=`
+    <div class="pagehd"><h2>Boletins de viagem</h2><div class="spacer"></div>
+      <button class="btn pri" onclick="novoBoletim()">+ Novo boletim</button></div>
+    <div class="hint" style="margin-bottom:14px">Cada viagem gera um <b>boletim único</b>. O sistema calcula KM previsto e valor da corrida automaticamente pelo roteiro — você só ajusta adicionais.</div>
+    <div class="card"><div class="bd" style="padding:0">${list.length?tabelaViagens(list):`<div class="empty"><div class="big">▤</div>Nenhum boletim ainda.</div>`}</div></div>`;
+};
+
+function novoBoletim(){
+  const rotOpts = db.roteiros.filter(r=>r.status==="ativo").map(r=>`<option value="${r.id}">${esc(r.codigo?r.codigo+" — ":"")}${esc(r.nome)}</option>`).join("");
+  const motOpts = db.motoristas.filter(m=>m.status==="ativo").map(m=>`<option value="${m.id}">${esc(m.nome)}</option>`).join("");
+  const body=`
+    <div class="frow">
+      <label class="fld"><span>Data</span><input type="date" id="b_data" value="${hoje()}"></label>
+      <label class="fld"><span>Sentido</span><select id="b_sentido">
+        <option value="ida">Ida</option><option value="volta">Volta</option>
+        <option value="ida_volta" selected>Ida e volta</option></select></label>
+    </div>
+    <label class="fld"><span>Roteiro</span><select id="b_rot" onchange="calcBoletim()">${rotOpts}</select></label>
+    <div class="frow">
+      <label class="fld"><span>Motorista</span><select id="b_mot" onchange="autoVeiculo()">${motOpts}</select></label>
+      <label class="fld"><span>Veículo</span><select id="b_vec"></select></label>
+    </div>
+    <div class="frow g3">
+      <label class="fld"><span>Passageiros (máx 7)</span><input type="number" id="b_pax" min="1" max="7" value="6"></label>
+      <label class="fld"><span>Hora saída</span><input type="time" id="b_saida" value="06:00"></label>
+      <label class="fld"><span>Hora chegada</span><input type="time" id="b_chegada" value="07:00"></label>
+    </div>
+    <div class="divide"></div>
+    <div class="frow g3">
+      <label class="fld"><span>KM previsto <small class="muted">(auto)</small></span><input type="number" id="b_km" step="0.1" oninput="somaBoletim()"></label>
+      <label class="fld"><span>Pedágio</span><input type="number" id="b_ped" step="0.01" value="0" oninput="somaBoletim()"></label>
+      <label class="fld"><span>Estacionamento</span><input type="number" id="b_est" step="0.01" value="0" oninput="somaBoletim()"></label>
+    </div>
+    <div class="frow g3">
+      <label class="fld"><span>Hora adicional</span><input type="number" id="b_hora" step="0.01" value="0" oninput="somaBoletim()"></label>
+      <label class="fld"><span>Outros</span><input type="number" id="b_out" step="0.01" value="0" oninput="somaBoletim()"></label>
+      <label class="fld"><span>Valor da corrida <small class="muted">(auto)</small></span><input type="number" id="b_corrida" step="0.01" oninput="somaBoletim()"></label>
+    </div>
+    <div class="hint" id="b_calc" style="background:var(--amber-soft);border-color:var(--amber)"></div>`;
+  modal("Novo boletim de viagem", body, [
+    { label:"Cancelar" },
+    { label:"Gerar boletim", cls:"pri", onClick: salvarBoletim }
+  ], { wide:true });
+  autoVeiculo(); calcBoletim();
+}
+function autoVeiculo(){
+  const mot = DB.motorista(db, $("#b_mot").value);
+  const opts = db.veiculos.map(v=>`<option value="${v.id}" ${mot&&mot.veiculoId===v.id?"selected":""}>${esc(v.modelo)} ${esc(v.placa)} (${v.capacidade} lug.)</option>`).join("");
+  $("#b_vec").innerHTML=opts;
+}
+function calcBoletim(){
+  const r = DB.roteiro(db, $("#b_rot").value); if(!r) return;
+  const sentido=$("#b_sentido").value;
+  const idaVolta = sentido==="ida_volta";
+  const km = DB.calcularKmRota(r,{ idaVolta });
+  $("#b_km").value = km;
+  $("#b_corrida").value = DB.valorCorrida(r, km).toFixed(2);
+  somaBoletim();
+}
+function somaBoletim(){
+  const g=id=>num($("#"+id).value);
+  const total = g("b_corrida")+g("b_ped")+g("b_est")+g("b_hora")+g("b_out");
+  const r = DB.roteiro(db, $("#b_rot").value);
+  const modeloTxt = { fixo:"Valor fixo por rota", km:`Por KM (${BRL(r.valorPorKm)}/km)`, fixo_km:`Fixo + KM` }[r.modelo]||"";
+  $("#b_calc").innerHTML = `<b>Modelo:</b> ${modeloTxt} &nbsp;·&nbsp; <b>Corrida</b> ${BRL(g("b_corrida"))} + adicionais ${BRL(total-g("b_corrida"))} = <b class="money-lg" style="font-size:16px">${BRL(total)}</b>`;
+}
+function salvarBoletim(){
+  const pax = num($("#b_pax").value);
+  const vec = DB.veiculo(db, $("#b_vec").value);
+  if(pax > (vec?vec.capacidade:7)){ toast(`Capacidade excedida: ${vec.modelo} comporta ${vec.capacidade} passageiros.`, "err"); return false; }
+  const r = DB.roteiro(db, $("#b_rot").value);
+  const motoristaId = $("#b_mot").value;
+  const data=$("#b_data").value, saida=$("#b_saida").value;
+  // conflito de escala (doc 1, seção 21)
+  const conflito = db.viagens.find(v=>v.motoristaId===motoristaId && v.data===data && v.horaSaida===saida && v.status!=="cancelada");
+  if(conflito){ toast("Conflito de escala: este motorista já possui viagem neste horário.", "err"); return false; }
+  const g=id=>num($("#"+id).value);
+  const v={
+    id: DB.uid("via"), boletim: DB.gerarNumeroBoletim(db), data,
+    empresaId: r.empresaId, roteiroId:r.id, roteiroNome:r.nome,
+    motoristaId, veiculoId: $("#b_vec").value, sentido:$("#b_sentido").value,
+    origem:r.origem, destino:r.destino, horaSaida:saida, horaChegada:$("#b_chegada").value,
+    passageiros:pax, kmPrevisto:g("b_km"), kmInicial:null, kmFinal:null, kmRealizado:g("b_km"),
+    motivoDesvio:"", valorCorrida:g("b_corrida"), pedagio:g("b_ped"), estacionamento:g("b_est"),
+    hora:g("b_hora"), outros:g("b_out"), total:g("b_corrida")+g("b_ped")+g("b_est")+g("b_hora")+g("b_out"),
+    embarques: db.funcionarios.filter(x=>x.rotaId===r.id).map(x=>({funcionarioId:x.id,nome:x.nome,endereco:x.endereco,status:"aguardando"})),
+    status:"programada",
+  };
+  db.viagens.push(v);
+  DB.log(db, "Boletim gerado", `Nº ${v.boletim} — ${r.nome} — ${nomeMot(motoristaId)}`);
+  toast(`Boletim ${v.boletim} gerado`);
+  go("boletins");
+}
+
+function verBoletim(id){
+  const v=db.viagens.find(x=>x.id===id); if(!v) return;
+  const linhas=(v.embarques||[]).map((e,i)=>`<tr><td class="num">${i+1}</td><td>${esc(e.nome)}</td><td>${esc(e.endereco)}</td><td>${badgeStatus(e.status==="embarcou"?"concluida":e.status==="ausente"?"cancelada":"programada")}</td></tr>`).join("");
+  const body=`
+    <div class="grid g2" style="gap:12px;margin-bottom:14px">
+      <div><div class="muted" style="font-size:12px">Boletim</div><div class="money-lg" style="font-size:20px">${v.boletim}</div></div>
+      <div style="text-align:right">${badgeStatus(v.status)}</div>
+    </div>
+    <table style="margin-bottom:8px"><tbody>
+      <tr><th>Roteiro</th><td>${esc(v.roteiroNome)}</td><th>Data</th><td>${v.data.split("-").reverse().join("/")}</td></tr>
+      <tr><th>Empresa</th><td>${esc(nomeEmp(v.empresaId))}</td><th>Sentido</th><td>${({ida:"Ida",volta:"Volta",ida_volta:"Ida e volta"})[v.sentido]}</td></tr>
+      <tr><th>Motorista</th><td>${esc(nomeMot(v.motoristaId))}</td><th>Veículo</th><td>${esc(nomeVec(v.veiculoId))}</td></tr>
+      <tr><th>Saída / Chegada</th><td>${v.horaSaida} → ${v.horaChegada}</td><th>Passageiros</th><td>${v.passageiros}</td></tr>
+      <tr><th>KM previsto</th><td class="mono">${v.kmPrevisto} km</td><th>KM realizado</th><td class="mono">${v.kmRealizado||"—"} km</td></tr>
+    </tbody></table>
+    <div class="divide"></div>
+    <table><tbody>
+      <tr><th>Corrida</th><td class="num">${BRL(v.valorCorrida)}</td><th>Pedágio</th><td class="num">${BRL(v.pedagio)}</td></tr>
+      <tr><th>Estacionamento</th><td class="num">${BRL(v.estacionamento)}</td><th>Hora</th><td class="num">${BRL(v.hora)}</td></tr>
+      <tr><th>Outros</th><td class="num">${BRL(v.outros)}</td><th>TOTAL</th><td class="num"><b>${BRL(v.total)}</b></td></tr>
+    </tbody></table>
+    ${linhas?`<div class="divide"></div><div class="muted" style="font-size:12px;margin-bottom:6px">PASSAGEIROS</div><table><thead><tr><th class="num">#</th><th>Nome</th><th>Embarque</th><th>Status</th></tr></thead><tbody>${linhas}</tbody></table>`:""}`;
+  const btns=[{label:"Fechar"}];
+  if(v.status==="programada") btns.push({label:"Cancelar viagem", cls:"danger", onClick:()=>{ v.status="cancelada"; DB.save(db); DB.log(db,"Viagem cancelada",`Boletim ${v.boletim}`); toast("Viagem cancelada"); go("boletins"); }});
+  modal(`Boletim ${v.boletim}`, body, btns, {wide:true});
+}
+
+/* ============ ESCALA DO DIA ============ */
+RENDER.escala = ()=>{
+  const d = window.__escalaData || hoje();
+  const list = db.viagens.filter(v=>v.data===d && v.status!=="cancelada")
+    .sort((a,b)=>a.horaSaida.localeCompare(b.horaSaida));
+  $("#view").innerHTML=`
+    <div class="pill-filter">
+      <label class="fld" style="margin:0"><span>Data da escala</span>
+        <input type="date" id="escData" value="${d}" onchange="window.__escalaData=this.value;RENDER.escala()"></label>
+    </div>
+    <div class="card"><div class="bd" style="padding:0">
+    ${list.length?`<table><thead><tr><th>Horário</th><th>Roteiro</th><th>Motorista</th><th>Veículo</th><th>Placa</th><th class="num">Ocupação</th><th>Status</th></tr></thead>
+    <tbody>${list.map(v=>{ const vec=DB.veiculo(db,v.veiculoId); const cap=vec?vec.capacidade:7;
+      return `<tr><td class="mono">${v.horaSaida}</td><td><b>${esc(v.roteiroNome)}</b></td>
+      <td>${esc(nomeMot(v.motoristaId))}</td><td>${esc(vec?vec.modelo:"—")}</td><td class="mono">${esc(placaVec(v.veiculoId))}</td>
+      <td class="num">${v.passageiros}/${cap}</td><td>${badgeStatus(v.status)}</td></tr>`;}).join("")}</tbody></table>`
+    :`<div class="empty"><div class="big">▦</div>Nenhuma viagem escalada para esta data.</div>`}
+    </div></div>`;
+};
+
+/* ============ SOLICITAÇÕES ============ */
+RENDER.solic = ()=>{
+  const list=[...db.solicitacoes].sort((a,b)=>(b.data||"").localeCompare(a.data||""));
+  $("#view").innerHTML=`
+    <div class="pagehd"><h2>Solicitações das empresas</h2></div>
+    <div class="card"><div class="bd" style="padding:0">
+    ${list.length?`<table><thead><tr><th>Empresa</th><th>Tipo</th><th>Descrição</th><th>Data</th><th>Status</th><th></th></tr></thead>
+    <tbody>${list.map(s=>`<tr><td><b>${esc(nomeEmp(s.empresaId))}</b></td><td>${esc(s.tipo)}</td>
+      <td>${esc(s.descricao)}</td><td class="mono">${(s.data||"").split("-").reverse().join("/")}</td><td>${badgeStatus(s.status)}</td>
+      <td>${s.status==="pendente"?`<div class="row"><button class="btn sm pri" onclick="respSolic('${s.id}','aprovada')">Aprovar</button><button class="btn sm danger" onclick="respSolic('${s.id}','recusada')">Recusar</button></div>`:"—"}</td></tr>`).join("")}</tbody></table>`
+    :`<div class="empty"><div class="big">✉</div>Nenhuma solicitação pendente.</div>`}
+    </div></div>`;
+};
+function respSolic(id,st){
+  const s=db.solicitacoes.find(x=>x.id===id); if(!s) return;
+  s.status=st; DB.save(db); DB.log(db,"Solicitação "+st, `${nomeEmp(s.empresaId)} — ${s.tipo}`);
+  toast(`Solicitação ${st==="aprovada"?"aprovada":"recusada"}`); RENDER.solic();
+}
+
+/* ============ FECHAMENTO & RECIBO ============ */
+RENDER.fechamento = ()=>{
+  const motOpts=db.motoristas.map(m=>`<option value="${m.id}">${esc(m.nome)}</option>`).join("");
+  $("#view").innerHTML=`
+    <div class="pagehd"><h2>Fechamento por período</h2></div>
+    <div class="card" style="margin-bottom:16px"><div class="bd">
+      <div class="frow g3">
+        <label class="fld"><span>Motorista</span><select id="fc_mot">${motOpts}</select></label>
+        <label class="fld"><span>Data inicial</span><input type="date" id="fc_ini" value="2026-01-26"></label>
+        <label class="fld"><span>Data final</span><input type="date" id="fc_fim" value="2026-02-10"></label>
+      </div>
+      <div class="frow g3">
+        <label class="fld"><span>Adiantamento</span><input type="number" id="fc_adiant" step="0.01" value="0"></label>
+        <label class="fld"><span>Descontos</span><input type="number" id="fc_desc" step="0.01" value="0"></label>
+        <label class="fld"><span>&nbsp;</span><button class="btn pri block" onclick="calcularFechamento()">Calcular período</button></label>
+      </div>
+    </div></div>
+    <div id="fc_result"></div>`;
+};
+function calcularFechamento(){
+  const motId=$("#fc_mot").value, ini=$("#fc_ini").value, fim=$("#fc_fim").value;
+  const adiant=num($("#fc_adiant").value), desc=num($("#fc_desc").value);
+  const f = DB.calcularFechamento(db, motId, ini, fim, adiant, desc);
+  window.__fech = f;
+  const kpi=(lb,vl,cls="")=>`<div class="card kpi"><div class="lb">${lb}</div><div class="vl ${cls}" style="font-size:22px">${vl}</div></div>`;
+  const rows=f.viagens.map(v=>`<tr><td class="mono">${v.boletim}</td><td>${esc(v.roteiroNome)}</td>
+    <td class="mono">${v.data.split("-").reverse().join("/")}</td><td class="num">${v.kmRealizado||v.kmPrevisto}</td>
+    <td class="num">${BRL(v.valorCorrida)}</td><td class="num">${BRL(v.pedagio)}</td><td class="num">${BRL(DB.totalViagem(v))}</td></tr>`).join("");
+  $("#fc_result").innerHTML = f.qtd===0 ? `<div class="empty"><div class="big">$</div>Nenhuma viagem concluída neste período.</div>` : `
+    <div class="grid g4" style="margin-bottom:16px">
+      ${kpi("Corridas", f.qtd)}${kpi("KM total", f.kmTotal+" km","amber")}
+      ${kpi("Produção bruta", BRL(f.bruto))}${kpi("Líquido a receber", BRL(f.liquido),"green")}
+    </div>
+    <div class="card"><div class="hd"><h3>Viagens do período — ${esc(nomeMot(motId))}</h3><div class="spacer"></div>
+      <button class="btn dark sm noprint" onclick="gerarRecibo()">Gerar recibo →</button></div>
+      <div class="bd" style="padding:0"><table><thead><tr><th>Boletim</th><th>Roteiro</th><th>Data</th><th class="num">KM</th><th class="num">Corrida</th><th class="num">Pedágio</th><th class="num">Total</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr><td colspan="4"></td><td class="num"><b>${BRL(f.corridas)}</b></td><td class="num"><b>${BRL(f.pedagios)}</b></td><td class="num"><b>${BRL(f.bruto)}</b></td></tr></tfoot></table></div></div>`;
+}
+function gerarRecibo(){
+  const f=window.__fech; if(!f) return;
+  const mot=DB.motorista(db,f.motoristaId);
+  const rows=f.viagens.map(v=>`<tr><td class="mono">${v.boletim}</td><td>${esc(v.roteiroNome)}</td>
+    <td class="mono">${v.data.split("-").reverse().join("/")}</td><td class="num">${BRL(v.valorCorrida)}</td>
+    <td class="num">${BRL(v.pedagio)}</td><td class="num">${BRL(v.estacionamento)}</td><td class="num">${BRL(v.hora)}</td>
+    <td class="num">${BRL(DB.totalViagem(v))}</td></tr>`).join("");
+  const html=`
+    <div style="font-family:var(--font);color:#000">
+      <div style="text-align:center;margin-bottom:6px"><b style="font-size:18px">RECIBO DE PRODUÇÃO</b><br>
+        <span class="muted">CoopVia — Cooperativa de Transporte Corporativo</span></div>
+      <div style="text-align:center;margin:10px 0"><span class="muted">Período:</span> <b>${f.ini.split("-").reverse().join("/")} a ${f.fim.split("-").reverse().join("/")}</b></div>
+      <p style="font-size:13px">Recebi da cooperativa a importância de <b>${BRL(f.liquido)}</b>, correspondente às corridas por mim efetuadas no período acima.</p>
+      <table style="margin:10px 0"><thead><tr><th>Boletim</th><th>Roteiro</th><th>Data</th><th class="num">Corrida</th><th class="num">Pedágio</th><th class="num">Estac.</th><th class="num">Hora</th><th class="num">Total</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+      <div style="max-width:280px;margin-left:auto;font-size:13px">
+        <div class="row"><span class="spacer">Subtotal</span><b class="mono">${BRL(f.bruto)}</b></div>
+        <div class="row"><span class="spacer">Adiantamento</span><b class="mono">− ${BRL(f.adiantamento)}</b></div>
+        <div class="row"><span class="spacer">Descontos</span><b class="mono">− ${BRL(f.descontos)}</b></div>
+        <div class="divide"></div>
+        <div class="row"><span class="spacer"><b>Líquido a receber</b></span><b class="money-lg" style="font-size:18px">${BRL(f.liquido)}</b></div>
+      </div>
+      <div style="margin-top:40px;display:flex;gap:30px">
+        <div style="flex:1;border-top:1px solid #000;padding-top:6px;text-align:center;font-size:12px">${esc(mot.nome)}<br>CPF ${esc(mot.cpf)}</div>
+        <div style="flex:1;border-top:1px solid #000;padding-top:6px;text-align:center;font-size:12px">Data</div>
+      </div>
+    </div>`;
+  const m=modal(`Recibo — ${mot.nome}`, html, [
+    { label:"Fechar" },
+    { label:"🖨 Imprimir", cls:"dark", onClick:()=>{ printRecibo(html); return false; } },
+    { label:"Registrar fechamento", cls:"pri", onClick:()=>registrarFechamento(f) }
+  ], { wide:true });
+}
+function printRecibo(html){
+  const w=window.open("","_blank");
+  w.document.write(`<html><head><title>Recibo</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>body{padding:30px}table{width:100%}th,td{border-bottom:1px solid #ccc}</style></head>
+    <body>${html}<script>onload=()=>{print()}<\/script><script>if("serviceWorker" in navigator){navigator.serviceWorker.register("sw.js").catch(()=>{});}</script>
+</body></html>`);
+  w.document.close();
+}
+function registrarFechamento(f){
+  db.fechamentos.push({ id:DB.uid("fec"), motoristaId:f.motoristaId, ini:f.ini, fim:f.fim,
+    qtd:f.qtd, bruto:f.bruto, liquido:f.liquido, ts:new Date().toISOString() });
+  // trava as viagens do período (doc 2, seção 12 passo 15)
+  f.viagens.forEach(v=>{ const vv=db.viagens.find(x=>x.id===v.id); if(vv) vv.fechado=true; });
+  DB.save(db);
+  DB.log(db,"Fechamento registrado",`${nomeMot(f.motoristaId)} — líquido ${BRL(f.liquido)}`);
+  toast("Fechamento registrado e período travado");
+}
+
+/* ============ RENTABILIDADE ============ */
+RENDER.rentab = ()=>{
+  const rows=db.roteiros.map(r=>{
+    const vs=db.viagens.filter(v=>v.roteiroId===r.id && v.status==="concluida");
+    const receita=vs.reduce((a,v)=>a+num(v.valorCorrida),0);
+    const km=vs.reduce((a,v)=>a+num(v.kmRealizado||v.kmPrevisto),0);
+    // custo médio do veículo mais usado
+    const vec=db.veiculos[0];
+    const custo=vs.reduce((a,v)=>{ const ve=DB.veiculo(db,v.veiculoId); return a+DB.custoRota(ve, v.kmRealizado||v.kmPrevisto); },0);
+    const result=receita-custo;
+    return { r, vs:vs.length, km, receita, custo, result };
+  }).filter(x=>x.vs>0);
+  const tot=rows.reduce((a,x)=>({rec:a.rec+x.receita,cus:a.cus+x.custo,res:a.res+x.result}),{rec:0,cus:0,res:0});
+  $("#view").innerHTML=`
+    <div class="pagehd"><h2>Rentabilidade por rota</h2></div>
+    <div class="hint" style="margin-bottom:14px">Receita da corrida menos o custo operacional do veículo (${BRL(db.veiculos[0].custoKm)}/km configurado). Visível apenas para a cooperativa.</div>
+    <div class="card"><div class="bd" style="padding:0">
+    ${rows.length?`<table><thead><tr><th>Roteiro</th><th class="num">Viagens</th><th class="num">KM</th><th class="num">Receita</th><th class="num">Custo op.</th><th class="num">Resultado</th></tr></thead>
+    <tbody>${rows.map(x=>`<tr><td><b>${esc(x.r.nome)}</b></td><td class="num">${x.vs}</td><td class="num">${x.km}</td>
+      <td class="num">${BRL(x.receita)}</td><td class="num">${BRL(x.custo)}</td>
+      <td class="num"><b style="color:${x.result>=0?'var(--green)':'var(--red)'}">${BRL(x.result)}</b></td></tr>`).join("")}</tbody>
+    <tfoot><tr><td>Total</td><td></td><td></td><td class="num"><b>${BRL(tot.rec)}</b></td><td class="num"><b>${BRL(tot.cus)}</b></td><td class="num"><b>${BRL(tot.res)}</b></td></tr></tfoot></table>`
+    :`<div class="empty"><div class="big">▲</div>Sem viagens concluídas para calcular rentabilidade.</div>`}
+    </div></div>`;
+};
+
+/* ============ CADASTROS genéricos ============ */
+function crudList(cfg){
+  const list=db[cfg.col];
+  $("#view").innerHTML=`
+    <div class="pagehd"><h2>${cfg.titulo}</h2><div class="spacer"></div>
+      <button class="btn pri" onclick="crudForm('${cfg.key}')">+ ${cfg.novo}</button></div>
+    <div class="card"><div class="bd" style="padding:0">
+    ${list.length?`<table><thead><tr>${cfg.cols.map(c=>`<th class="${c.num?'num':''}">${c.lb}</th>`).join("")}<th></th></tr></thead>
+    <tbody>${list.map(o=>`<tr>${cfg.cols.map(c=>`<td class="${c.num?'num':''}">${c.render?c.render(o):esc(o[c.f]??"—")}</td>`).join("")}
+      <td><div class="row"><button class="btn sm ghost" onclick="crudForm('${cfg.key}','${o.id}')">Editar</button>
+      <button class="btn sm danger" onclick="crudDel('${cfg.key}','${o.id}')">×</button></div></td></tr>`).join("")}</tbody></table>`
+    :`<div class="empty"><div class="big">＋</div>Nenhum registro. Clique em “${cfg.novo}”.</div>`}
+    </div></div>`;
+}
+function crudForm(key,id){
+  if(key==="roteiros") return formRoteiro(id);
+  const cfg=CRUD[key];
+  const o = id? db[cfg.col].find(x=>x.id===id) : {};
+  const body=cfg.fields.map(fld=>{
+    const val=o[fld.f]??fld.def??"";
+    if(fld.type==="select"){
+      const opts=(typeof fld.opts==="function"?fld.opts():fld.opts).map(op=>`<option value="${op.v}" ${val===op.v?"selected":""}>${esc(op.l)}</option>`).join("");
+      return `<label class="fld"><span>${fld.lb}</span><select id="cf_${fld.f}">${opts}</select></label>`;
+    }
+    return `<label class="fld"><span>${fld.lb}</span><input id="cf_${fld.f}" type="${fld.type||"text"}" value="${esc(val)}" ${fld.attr||""}></label>`;
+  });
+  // agrupa em pares
+  let grouped=""; for(let i=0;i<body.length;i+=2){ grouped+=`<div class="frow">${body[i]||""}${body[i+1]||""}</div>`; }
+  modal(id?`Editar ${cfg.singular}`:`Novo ${cfg.singular}`, grouped, [
+    { label:"Cancelar" },
+    { label:"Salvar", cls:"pri", onClick:()=>crudSave(key,id) }
+  ], {wide:true});
+}
+function crudSave(key,id){
+  const cfg=CRUD[key];
+  const o = id? db[cfg.col].find(x=>x.id===id) : { id:DB.uid(cfg.prefix) };
+  cfg.fields.forEach(fld=>{
+    let v=$("#cf_"+fld.f).value;
+    if(fld.type==="number") v=num(v);
+    o[fld.f]=v;
+  });
+  if(cfg.after) cfg.after(o);
+  if(!id) db[cfg.col].push(o);
+  DB.save(db);
+  DB.log(db, (id?"Editou ":"Cadastrou ")+cfg.singular, o.nome||o.placa||o.id);
+  toast(cfg.singular+" salvo");
+  RENDER[cfg.render]();
+}
+function crudDel(key,id){
+  const cfg=CRUD[key];
+  confirm(`Excluir este registro de ${cfg.singular}?`, ()=>{
+    db[cfg.col]=db[cfg.col].filter(x=>x.id!==id); DB.save(db);
+    DB.log(db,"Excluiu "+cfg.singular, id); toast("Excluído"); RENDER[cfg.render]();
+  }, "Excluir");
+}
+
+const CRUD = {
+  empresas:{ col:"empresas", prefix:"emp", singular:"empresa", titulo:"Empresas contratantes", novo:"Nova empresa", render:"empresas",
+    cols:[{lb:"Empresa",f:"nome"},{lb:"CNPJ",f:"cnpj"},{lb:"Contato",f:"contato"},{lb:"Status",render:o=>badgeStatus(o.status)}],
+    fields:[{lb:"Nome",f:"nome"},{lb:"CNPJ",f:"cnpj"},{lb:"Contato",f:"contato"},{lb:"Telefone",f:"telefone"},
+      {lb:"Status",f:"status",type:"select",opts:[{v:"ativo",l:"Ativo"},{v:"suspenso",l:"Suspenso"},{v:"inativo",l:"Inativo"}]}] },
+  motoristas:{ col:"motoristas", prefix:"mot", singular:"motorista", titulo:"Motoristas", novo:"Novo motorista", render:"motoristas",
+    cols:[{lb:"Nome",f:"nome"},{lb:"CPF",f:"cpf"},{lb:"CNH",f:"cnh"},{lb:"Cat.",f:"categoria"},{lb:"Veículo",render:o=>esc(nomeVec(o.veiculoId))},{lb:"Status",render:o=>badgeStatus(o.status)}],
+    fields:[{lb:"Nome",f:"nome"},{lb:"CPF",f:"cpf"},{lb:"Telefone",f:"telefone"},{lb:"CNH",f:"cnh"},
+      {lb:"Categoria",f:"categoria",def:"D"},{lb:"Validade CNH",f:"validadeCnh",type:"date"},
+      {lb:"Veículo",f:"veiculoId",type:"select",opts:()=>db.veiculos.map(v=>({v:v.id,l:`${v.modelo} ${v.placa}`}))},
+      {lb:"Status",f:"status",type:"select",opts:[{v:"ativo",l:"Ativo"},{v:"ferias",l:"Férias"},{v:"afastado",l:"Afastado"},{v:"inativo",l:"Inativo"}]}] },
+  veiculos:{ col:"veiculos", prefix:"vec", singular:"veículo", titulo:"Veículos (até 7 lugares)", novo:"Novo veículo", render:"veiculos",
+    cols:[{lb:"Modelo",render:o=>esc(o.marca+" "+o.modelo)},{lb:"Placa",f:"placa"},{lb:"Cap.",f:"capacidade",num:true},{lb:"KM",f:"km",num:true},{lb:"Custo/km",render:o=>BRL(o.custoKm),num:true},{lb:"Status",render:o=>badgeStatus(o.status)}],
+    fields:[{lb:"Marca",f:"marca"},{lb:"Modelo",f:"modelo"},{lb:"Ano",f:"ano",type:"number"},{lb:"Placa",f:"placa"},
+      {lb:"Cor",f:"cor"},{lb:"Capacidade (máx 7)",f:"capacidade",type:"number",def:7,attr:"max=7 min=1"},
+      {lb:"KM atual",f:"km",type:"number"},{lb:"Custo operacional /km",f:"custoKm",type:"number",def:1.2,attr:"step=0.01"},
+      {lb:"Vencimento seguro",f:"seguro",type:"date"},{lb:"Vencimento licenciamento",f:"licenciamento",type:"date"},
+      {lb:"Status",f:"status",type:"select",opts:[{v:"disponivel",l:"Disponível"},{v:"em_viagem",l:"Em viagem"},{v:"manutencao",l:"Manutenção"},{v:"indisponivel",l:"Indisponível"}]}],
+    after:(o)=>{ if(o.capacidade>7) o.capacidade=7; } },
+  funcionarios:{ col:"funcionarios", prefix:"fun", singular:"funcionário", titulo:"Funcionários / Passageiros", novo:"Novo funcionário", render:"funcionarios",
+    cols:[{lb:"Nome",f:"nome"},{lb:"Empresa",render:o=>esc(nomeEmp(o.empresaId))},{lb:"Embarque",f:"endereco"},{lb:"Entrada",f:"horaEntrada"},{lb:"Rota",render:o=>{const r=DB.roteiro(db,o.rotaId);return r?esc(r.nome):'<span class="muted">Sem rota</span>';}},{lb:"Status",render:o=>badgeStatus(o.status)}],
+    fields:[{lb:"Nome completo",f:"nome"},{lb:"CPF",f:"cpf"},{lb:"Telefone",f:"telefone"},{lb:"Matrícula",f:"matricula"},
+      {lb:"Empresa",f:"empresaId",type:"select",opts:()=>db.empresas.map(e=>({v:e.id,l:e.nome}))},{lb:"Setor",f:"setor"},
+      {lb:"Endereço de embarque",f:"endereco"},{lb:"Ponto de referência",f:"referencia"},
+      {lb:"Destino",f:"destino"},{lb:"Hora entrada",f:"horaEntrada",type:"time"},{lb:"Hora saída",f:"horaSaida",type:"time"},
+      {lb:"Rota",f:"rotaId",type:"select",opts:()=>[{v:"",l:"— Sem rota —"}].concat(db.roteiros.map(r=>({v:r.id,l:r.nome})))},
+      {lb:"Status",f:"status",type:"select",opts:[{v:"ativo",l:"Ativo"},{v:"suspenso",l:"Suspenso"},{v:"inativo",l:"Inativo"}]}] },
+  roteiros:{ col:"roteiros", prefix:"rot", singular:"roteiro", titulo:"Roteiros padronizados", novo:"Novo roteiro", render:"roteiros",
+    cols:[{lb:"Código",f:"codigo"},{lb:"Roteiro",f:"nome"},{lb:"Empresa",render:o=>esc(nomeEmp(o.empresaId))},{lb:"KM",f:"kmPadrao",num:true},{lb:"Modelo",render:o=>({fixo:"Fixo",km:"Por KM",fixo_km:"Fixo+KM"})[o.modelo]},{lb:"Valor",render:o=>o.modelo==="km"?BRL(o.valorPorKm)+"/km":BRL(o.valorFixo),num:true}],
+    fields:[{lb:"Código",f:"codigo"},{lb:"Nome",f:"nome"},
+      {lb:"Empresa",f:"empresaId",type:"select",opts:()=>db.empresas.map(e=>({v:e.id,l:e.nome}))},
+      {lb:"Origem",f:"origem"},{lb:"Destino",f:"destino"},{lb:"KM padrão",f:"kmPadrao",type:"number",attr:"step=0.1"},
+      {lb:"Modelo remuneração",f:"modelo",type:"select",opts:[{v:"fixo",l:"Valor fixo por rota"},{v:"km",l:"Valor por KM"},{v:"fixo_km",l:"Fixo + KM"}]},
+      {lb:"Valor fixo (R$)",f:"valorFixo",type:"number",attr:"step=0.01"},{lb:"Valor por KM (R$)",f:"valorPorKm",type:"number",def:1.8,attr:"step=0.01"},
+      {lb:"Valor base fixo+km",f:"valorBase",type:"number",def:0,attr:"step=0.01"},{lb:"Pedágio padrão",f:"pedagioPadrao",type:"number",def:0,attr:"step=0.01"},
+      {lb:"Status",f:"status",type:"select",opts:[{v:"ativo",l:"Ativo"},{v:"inativo",l:"Inativo"}]}] },
+};
+["empresas","motoristas","veiculos","funcionarios","roteiros"].forEach(k=>RENDER[k]=()=>crudList(CRUD[k]));
+
+/* ============ ROTEIRO com cálculo de KM pelo mapa (OSRM) ============ */
+function formRoteiro(id){
+  const o = id ? db.roteiros.find(x=>x.id===id) : {};
+  const g=(f,d)=>o[f]??d??"";
+  const empOpts=db.empresas.map(e=>`<option value="${e.id}" ${g('empresaId')===e.id?'selected':''}>${esc(e.nome)}</option>`).join("");
+  const modelo=g('modelo','fixo');
+  const pontos=(o.pontos||[]).map(p=>p.endereco||p).join("\n");
+  const body=`
+    <div class="frow"><label class="fld"><span>Código</span><input id="r_cod" value="${esc(g('codigo'))}"></label>
+      <label class="fld"><span>Nome do roteiro</span><input id="r_nome" value="${esc(g('nome'))}"></label></div>
+    <label class="fld"><span>Empresa contratante</span><select id="r_emp">${empOpts}</select></label>
+    <div class="frow"><label class="fld"><span>Origem (endereço)</span><input id="r_ori" value="${esc(g('origem'))}" placeholder="Ex.: Refinaria ACELEN, São Francisco do Conde BA"></label>
+      <label class="fld"><span>Destino (endereço)</span><input id="r_dst" value="${esc(g('destino'))}" placeholder="Ex.: Caípe de Baixo, São Francisco do Conde BA"></label></div>
+    <label class="fld"><span>Pontos de embarque intermediários <small class="muted">(um endereço por linha, opcional)</small></span>
+      <textarea id="r_pontos" rows="3" placeholder="Rua A, 100 — Candeias BA&#10;Rua B, 250 — Candeias BA">${esc(pontos)}</textarea></label>
+    <div class="row" style="gap:10px;align-items:flex-end">
+      <label class="fld" style="flex:1;margin:0"><span>KM padrão</span><input type="number" id="r_km" step="0.1" value="${esc(g('kmPadrao'))}"></label>
+      <button type="button" class="btn dark" id="r_calc" onclick="calcMapaRoteiro()">🗺️ Calcular pelo mapa (OSRM)</button>
+    </div>
+    <div id="r_mapaOut" class="hint hidden" style="margin-top:8px"></div>
+    <div class="divide"></div>
+    <div class="frow"><label class="fld"><span>Modelo de remuneração</span><select id="r_mod" onchange="toggleModelo()">
+      <option value="fixo" ${modelo==='fixo'?'selected':''}>Valor fixo por rota</option>
+      <option value="km" ${modelo==='km'?'selected':''}>Valor por KM</option>
+      <option value="fixo_km" ${modelo==='fixo_km'?'selected':''}>Fixo + KM</option></select></label>
+      <label class="fld"><span>Pedágio padrão</span><input type="number" id="r_ped" step="0.01" value="${g('pedagioPadrao',0)}"></label></div>
+    <div class="frow g3">
+      <label class="fld" id="wrap_fixo"><span>Valor fixo (R$)</span><input type="number" id="r_fixo" step="0.01" value="${g('valorFixo',0)}"></label>
+      <label class="fld" id="wrap_base"><span>Valor base (R$)</span><input type="number" id="r_base" step="0.01" value="${g('valorBase',0)}"></label>
+      <label class="fld" id="wrap_pkm"><span>Valor por KM (R$)</span><input type="number" id="r_pkm" step="0.01" value="${g('valorPorKm',1.8)}"></label></div>
+    <label class="fld"><span>Status</span><select id="r_st"><option value="ativo" ${g('status')!=='inativo'?'selected':''}>Ativo</option><option value="inativo" ${g('status')==='inativo'?'selected':''}>Inativo</option></select></label>
+    <div class="hint">O KM previsto de cada boletim virá deste KM padrão. O botão do mapa usa Nominatim + OSRM (grátis) — servidores demo têm limite de uso; em produção troque pelo servidor próprio em <span class="mono">geo.js → Geo.CFG</span>.</div>`;
+  modal(id?"Editar roteiro":"Novo roteiro", body, [
+    {label:"Cancelar"},
+    {label:"Salvar roteiro", cls:"pri", onClick:()=>salvarRoteiro(id)}
+  ], {wide:true});
+  toggleModelo();
+}
+function toggleModelo(){
+  const m=$("#r_mod").value;
+  $("#wrap_fixo").style.display = (m==='fixo'||m==='fixo_km')?'block':'none';
+  $("#wrap_base").style.display = (m==='fixo_km')?'block':'none';
+  $("#wrap_pkm").style.display  = (m==='km'||m==='fixo_km')?'block':'none';
+}
+async function calcMapaRoteiro(){
+  const ori=$("#r_ori").value.trim(), dst=$("#r_dst").value.trim();
+  const pts=$("#r_pontos").value.split("\n").map(s=>s.trim()).filter(Boolean);
+  if(!ori||!dst){ toast("Preencha origem e destino primeiro","err"); return; }
+  const btn=$("#r_calc"), out=$("#r_mapaOut");
+  btn.disabled=true; const txt=btn.textContent; btn.textContent="Calculando…";
+  out.classList.remove("hidden");
+  out.innerHTML="🔎 Localizando endereços e traçando a rota… <span class='muted'>(cada ponto novo leva ~1s)</span>";
+  const enderecos=[ori, ...pts, dst];
+  const r=await Geo.calcularRota(enderecos);
+  btn.disabled=false; btn.textContent=txt;
+  if(r.erro){ out.style.borderColor="var(--red)"; out.innerHTML="⚠ "+esc(r.erro)+"<br><small class='muted'>Dica: inclua cidade e UF (ex.: “Candeias BA”). Você também pode digitar o KM manualmente.</small>"; return; }
+  out.style.borderColor="var(--amber)"; out.style.background="var(--amber-soft)";
+  $("#r_km").value=r.km;
+  const trechos=r.trechos.map(t=>`<div class="row" style="font-size:12px"><span>${esc(t.de)} → ${esc(t.para)}</span><span class="spacer"></span><b class="mono">${t.km} km</b></div>`).join("");
+  out.innerHTML=`${trechos}<div class="divide" style="margin:8px 0"></div><div class="row"><b>Total da rota</b><span class="spacer"></span><b class="money-lg" style="font-size:16px">${r.km} km</b> <span class="muted">· ~${r.min} min</span></div>`;
+  toast("KM calculado pelo mapa");
+}
+function salvarRoteiro(id){
+  const o = id ? db.roteiros.find(x=>x.id===id) : { id:DB.uid("rot"), estacionamentoPadrao:0, idaVolta:false, obs:"" };
+  const pts=$("#r_pontos").value.split("\n").map(s=>s.trim()).filter(Boolean).map(e=>({endereco:e}));
+  Object.assign(o, {
+    codigo:$("#r_cod").value, nome:$("#r_nome").value, empresaId:$("#r_emp").value,
+    origem:$("#r_ori").value, destino:$("#r_dst").value, pontos:pts,
+    kmPadrao:num($("#r_km").value), modelo:$("#r_mod").value,
+    valorFixo:num($("#r_fixo").value), valorBase:num($("#r_base").value), valorPorKm:num($("#r_pkm").value),
+    pedagioPadrao:num($("#r_ped").value), status:$("#r_st").value,
+  });
+  if(!id) db.roteiros.push(o);
+  DB.save(db); DB.log(db,(id?"Editou ":"Cadastrou ")+"roteiro", o.nome);
+  toast("Roteiro salvo"); RENDER.roteiros();
+}
+
+/* ============ AUDITORIA ============ */
+RENDER.auditoria = ()=>{
+  const list=(db.auditoria||[]).slice(0,200);
+  $("#view").innerHTML=`
+    <div class="pagehd"><h2>Auditoria</h2></div>
+    <div class="card"><div class="bd" style="padding:0">
+    ${list.length?`<table><thead><tr><th>Data/Hora</th><th>Usuário</th><th>Ação</th><th>Detalhe</th></tr></thead>
+    <tbody>${list.map(a=>{const dt=new Date(a.ts);return `<tr><td class="mono">${dt.toLocaleString("pt-BR")}</td><td>${esc(a.usuario)}</td><td><b>${esc(a.acao)}</b></td><td class="muted">${esc(a.detalhe||"")}</td></tr>`;}).join("")}</tbody></table>`
+    :`<div class="empty"><div class="big">❐</div>Sem registros de auditoria ainda.</div>`}
+    </div></div>`;
+};
+</script>
+<script>if("serviceWorker" in navigator){navigator.serviceWorker.register("sw.js").catch(()=>{});}</script>
+</body>
+</html>

@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoopVia — Motorista</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#14181f">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+  body{background:var(--paper)}
+  .mhead{background:var(--ink);color:#fff;padding:16px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:10}
+  .mhead .logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--amber),var(--amber-d));display:grid;place-items:center;color:#1a1206;font-weight:800;font-size:18px}
+  .mhead b{font-size:16px}.mhead small{color:#8b94a2;display:block;font-size:11px}
+  .mtabs{display:flex;background:#fff;border-bottom:1px solid var(--card-line);position:sticky;top:68px;z-index:9}
+  .mtab{flex:1;text-align:center;padding:13px;font-weight:600;font-size:13.5px;color:var(--muted);border-bottom:2px solid transparent;cursor:pointer}
+  .mtab.on{color:var(--amber-d);border-bottom-color:var(--amber)}
+  .mwrap{padding:16px;max-width:640px;margin:0 auto}
+  .bigbtn{width:100%;padding:18px;border-radius:14px;border:none;font-size:16px;font-weight:800;cursor:pointer;margin:6px 0;letter-spacing:.01em}
+  .bigbtn.go{background:var(--green);color:#fff}
+  .bigbtn.amber{background:var(--amber);color:#1a1206}
+  .bigbtn.dark{background:var(--ink);color:#fff}
+  .bigbtn.red{background:var(--red);color:#fff}
+  .bigbtn:disabled{opacity:.4}
+  .pax{display:flex;align-items:center;gap:10px;padding:14px;border:1px solid var(--card-line);border-radius:12px;margin-bottom:8px;background:#fff}
+  .pax .n{width:28px;height:28px;border-radius:50%;background:var(--ink);color:#fff;display:grid;place-items:center;font-weight:700;font-size:13px;flex:0 0 28px}
+  .pax .info{flex:1;min-width:0}.pax .info b{display:block;font-size:14px}.pax .info span{font-size:12px;color:var(--muted)}
+  .pax .acts{display:flex;gap:6px}
+  .pill{padding:7px 12px;border-radius:9px;border:1px solid var(--card-line);background:#fff;font-weight:700;font-size:12px;cursor:pointer}
+  .pill.on-go{background:var(--green);color:#fff;border-color:var(--green)}
+  .pill.on-no{background:var(--red);color:#fff;border-color:var(--red)}
+</style>
+</head>
+<body>
+  <div class="mhead"><div class="logo">C</div><div style="flex:1"><b id="motNome">Motorista</b><small id="motVec"></small></div>
+    <button class="btn ghost sm" style="color:#cfd6e0;border-color:#303945" onclick="Auth.logout()">Sair</button></div>
+  <div class="mtabs">
+    <div class="mtab on" data-t="hoje" onclick="tab('hoje')">Minha viagem</div>
+    <div class="mtab" data-t="prod" onclick="tab('prod')">Minha produção</div>
+  </div>
+  <div class="mwrap" id="view"></div>
+<script src="db.js"></script>
+<script src="ui.js"></script>
+<script>
+const { $, $$, esc, toast, modal, confirm } = UI;
+const { BRL, num, hoje } = DB;
+let db, MOT, VEC;
+const U = Auth.require(["motorista"]);
+if (U) init();
+function init(){
+  db=DB.get(); MOT=DB.motorista(db,U.motoristaId); VEC=DB.veiculo(db,MOT.veiculoId);
+  $("#motNome").textContent=MOT.nome;
+  $("#motVec").textContent=VEC?`${VEC.modelo} · ${VEC.placa}`:"";
+  tab("hoje");
+}
+function tab(t){ $$(".mtab").forEach(x=>x.classList.toggle("on",x.dataset.t===t)); db=DB.get(); R[t](); }
+const R={};
+
+R.hoje=()=>{
+  const d=hoje();
+  const list=db.viagens.filter(v=>v.motoristaId===U.motoristaId && v.data===d && v.status!=="cancelada")
+    .sort((a,b)=>a.horaSaida.localeCompare(b.horaSaida));
+  if(!list.length){ $("#view").innerHTML=`<div class="empty" style="margin-top:40px"><div class="big">◈</div>Nenhuma viagem escalada para hoje.<br><small>Aproveite o descanso.</small></div>`; return; }
+  $("#view").innerHTML=list.map(v=>cardViagem(v)).join("");
+};
+
+function cardViagem(v){
+  const emp=DB.empresa(db,v.empresaId);
+  const emb=v.embarques||[];
+  const embarcados=emb.filter(e=>e.status==="embarcou").length;
+  let acao="";
+  if(v.status==="programada"){
+    acao=`<button class="bigbtn go" onclick="iniciar('${v.id}')">▶ INICIAR VIAGEM</button>`;
+  } else if(v.status==="andamento"){
+    acao=`<button class="bigbtn dark" onclick="finalizar('${v.id}')">■ FINALIZAR VIAGEM</button>`;
+  } else {
+    acao=`<div class="badge green" style="width:100%;justify-content:center;padding:10px"><span class="dot"></span>Viagem concluída · ${BRL(v.total)}</div>`;
+  }
+  const paxList = emb.map((e,i)=>`
+    <div class="pax">
+      <div class="n">${i+1}</div>
+      <div class="info"><b>${esc(e.nome)}</b><span>${esc(e.endereco)}</span></div>
+      ${v.status==="andamento"?`<div class="acts">
+        <button class="pill ${e.status==='embarcou'?'on-go':''}" onclick="marcar('${v.id}','${e.funcionarioId}','embarcou')">✓</button>
+        <button class="pill ${e.status==='ausente'?'on-no':''}" onclick="marcar('${v.id}','${e.funcionarioId}','ausente')">✕</button>
+      </div>`:`<span class="badge ${e.status==='embarcou'?'green':e.status==='ausente'?'red':'gray'}">${e.status==='embarcou'?'Embarcou':e.status==='ausente'?'Ausente':'Aguardando'}</span>`}
+    </div>`).join("");
+  return `<div class="card" style="margin-bottom:16px"><div class="bd">
+    <div class="row" style="margin-bottom:10px"><div><div class="muted" style="font-size:12px">PRÓXIMA VIAGEM · Boletim ${v.boletim}</div>
+      <h3 style="font-size:18px">${esc(v.roteiroNome)}</h3></div><div class="spacer"></div><div class="mono" style="font-size:20px;font-weight:800">${v.horaSaida}</div></div>
+    <table style="margin-bottom:6px"><tbody>
+      <tr><th style="padding:6px 0;border:none">Empresa</th><td style="padding:6px 0;border:none;text-align:right">${esc(emp?emp.nome:'—')}</td></tr>
+      <tr><th style="padding:6px 0;border:none">Destino</th><td style="padding:6px 0;border:none;text-align:right">${esc(v.destino)}</td></tr>
+      <tr><th style="padding:6px 0;border:none">Veículo</th><td style="padding:6px 0;border:none;text-align:right">${esc(VEC?VEC.placa:'—')}</td></tr>
+      <tr><th style="padding:6px 0;border:none">KM previsto</th><td style="padding:6px 0;border:none;text-align:right" class="mono">${v.kmPrevisto} km</td></tr>
+      <tr><th style="padding:6px 0;border:none">Passageiros</th><td style="padding:6px 0;border:none;text-align:right">${embarcados}/${emb.length}</td></tr>
+    </tbody></table>
+    <a class="btn ghost block sm" style="margin-bottom:10px" target="_blank" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(v.destino)}">🧭 Abrir navegação GPS</a>
+    <div style="font-size:12px;font-weight:700;color:var(--muted);margin:8px 0 6px">LISTA DE EMBARQUE</div>
+    ${paxList}
+    <div style="margin-top:12px">${acao}</div>
+    ${v.status==="andamento"?`<button class="bigbtn amber" style="font-size:14px;padding:13px" onclick="adicionais('${v.id}')">+ Pedágio / Estacionamento / Hora</button>`:""}
+  </div></div>`;
+}
+
+function iniciar(id){
+  const v=db.viagens.find(x=>x.id===id);
+  modal("Iniciar viagem — KM inicial",`
+    <label class="fld"><span>KM inicial do veículo (odômetro)</span>
+      <input type="number" id="kmi" value="${VEC?VEC.km:''}" style="font-size:18px"></label>
+    <div class="hint">Ao finalizar você informa o KM final — o sistema calcula o KM realizado automaticamente.</div>`,
+    [{label:"Cancelar"},{label:"Iniciar", cls:"pri", onClick:()=>{
+      v.kmInicial=num($("#kmi").value); v.status="andamento";
+      const ve=DB.veiculo(db,v.veiculoId); if(ve) ve.status="em_viagem";
+      DB.save(db); DB.log(db,"Viagem iniciada",`Boletim ${v.boletim} — KM inicial ${v.kmInicial}`);
+      toast("Viagem iniciada"); R.hoje();
+    }}]);
+}
+function marcar(vid,fid,st){
+  const v=db.viagens.find(x=>x.id===vid);
+  const e=v.embarques.find(x=>x.funcionarioId===fid); if(!e) return;
+  e.status = e.status===st ? "aguardando" : st;
+  e.registro={data:hoje(),hora:new Date().toLocaleTimeString("pt-BR").slice(0,5)};
+  DB.save(db); R.hoje();
+}
+function adicionais(id){
+  const v=db.viagens.find(x=>x.id===id);
+  modal("Adicionais da viagem",`
+    <div class="frow g3">
+      <label class="fld"><span>Pedágio</span><input type="number" id="a_ped" step="0.01" value="${v.pedagio||0}"></label>
+      <label class="fld"><span>Estacionamento</span><input type="number" id="a_est" step="0.01" value="${v.estacionamento||0}"></label>
+      <label class="fld"><span>Hora extra</span><input type="number" id="a_hora" step="0.01" value="${v.hora||0}"></label>
+    </div>
+    <div class="hint">Guarde os comprovantes. Eles entram no total da viagem e na sua produção.</div>`,
+    [{label:"Cancelar"},{label:"Salvar", cls:"pri", onClick:()=>{
+      v.pedagio=num($("#a_ped").value); v.estacionamento=num($("#a_est").value); v.hora=num($("#a_hora").value);
+      v.total=DB.totalViagem(v); DB.save(db); toast("Adicionais salvos"); R.hoje();
+    }}]);
+}
+function finalizar(id){
+  const v=db.viagens.find(x=>x.id===id);
+  modal("Finalizar viagem — KM final",`
+    <label class="fld"><span>KM final do veículo (odômetro)</span>
+      <input type="number" id="kmf" value="${num(v.kmInicial)+num(v.kmPrevisto)}" style="font-size:18px"></label>
+    <div class="hint" id="kmcalc"></div>
+    <div id="desvioBox" class="hidden">
+      <label class="fld"><span>Motivo do desvio de KM</span><select id="motivo">
+        <option>Desvio de rota</option><option>Trânsito</option><option>Obra</option><option>Novo passageiro</option><option>Alteração da empresa</option><option>Outro</option></select></label>
+    </div>`,
+    [{label:"Cancelar"},{label:"Finalizar", cls:"pri", onClick:()=>{
+      const kmf=num($("#kmf").value); const kmr=DB.kmRealizado(v.kmInicial,kmf);
+      v.kmFinal=kmf; v.kmRealizado=kmr;
+      const diff=kmr-num(v.kmPrevisto);
+      if(Math.abs(diff)>10 && !$("#motivo")) { toast("Informe o motivo do desvio","err"); return false; }
+      if($("#motivo")) v.motivoDesvio=$("#motivo").value;
+      v.total=DB.totalViagem(v); v.status="concluida";
+      const ve=DB.veiculo(db,v.veiculoId); if(ve){ ve.status="disponivel"; ve.km=kmf; }
+      DB.save(db); DB.log(db,"Viagem concluída",`Boletim ${v.boletim} — KM real ${kmr} (prev ${v.kmPrevisto})`);
+      toast("Viagem finalizada"); R.hoje();
+    }}]);
+  // mostra cálculo dinâmico
+  setTimeout(()=>{
+    const upd=()=>{ const kmf=num($("#kmf").value); const kmr=DB.kmRealizado(v.kmInicial,kmf); const diff=kmr-num(v.kmPrevisto);
+      $("#kmcalc").innerHTML=`KM realizado: <b>${kmr} km</b> · Previsto: ${v.kmPrevisto} km · Diferença: <b style="color:${Math.abs(diff)>10?'var(--red)':'var(--green)'}">${diff>=0?'+':''}${diff} km</b>`;
+      $("#desvioBox").classList.toggle("hidden", Math.abs(diff)<=10);
+    };
+    $("#kmf").addEventListener("input",upd); upd();
+  },30);
+}
+
+R.prod=()=>{
+  const vs=db.viagens.filter(v=>v.motoristaId===U.motoristaId && v.status==="concluida")
+    .sort((a,b)=>b.data.localeCompare(a.data));
+  const tot=vs.reduce((a,v)=>({km:a.km+num(v.kmRealizado||v.kmPrevisto),ped:a.ped+num(v.pedagio),total:a.total+DB.totalViagem(v)}),{km:0,ped:0,total:0});
+  $("#view").innerHTML=`
+    <div class="grid g3" style="margin-bottom:14px">
+      <div class="card kpi"><div class="lb">Corridas</div><div class="vl">${vs.length}</div></div>
+      <div class="card kpi"><div class="lb">KM rodados</div><div class="vl amber" style="font-size:22px">${tot.km}</div></div>
+      <div class="card kpi"><div class="lb">Total produzido</div><div class="vl green" style="font-size:20px">${BRL(tot.total)}</div></div>
+    </div>
+    <div class="card"><div class="hd"><h3>Minhas corridas</h3></div><div class="bd" style="padding:0">
+    ${vs.length?`<table><thead><tr><th>Data</th><th>Roteiro</th><th class="num">KM</th><th class="num">Corrida</th><th class="num">Total</th></tr></thead>
+    <tbody>${vs.map(v=>`<tr><td class="mono">${v.data.split("-").reverse().join("/")}</td><td>${esc(v.roteiroNome)}</td>
+      <td class="num">${v.kmRealizado||v.kmPrevisto}</td><td class="num">${BRL(v.valorCorrida)}</td><td class="num"><b>${BRL(DB.totalViagem(v))}</b></td></tr>`).join("")}</tbody></table>`
+    :`<div class="empty"><div class="big">▤</div>Nenhuma corrida concluída ainda.</div>`}
+    </div></div>
+    <div class="hint" style="margin-top:12px">Sua produção é somada por período. No fechamento, a cooperativa gera seu recibo com o líquido a receber.</div>`;
+};
+</script>
+<script>if("serviceWorker" in navigator){navigator.serviceWorker.register("sw.js").catch(()=>{});}</script>
+</body>
+</html>

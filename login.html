@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoopVia — Acesso</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#14181f">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+  body { display: grid; place-items: center; min-height: 100vh; background: var(--ink);
+    background-image: radial-gradient(circle at 20% 10%, #1e2731 0, transparent 55%),
+                      radial-gradient(circle at 90% 90%, #201a0a 0, transparent 45%); }
+  .box { width: 100%; max-width: 400px; padding: 20px; }
+  .head { text-align: center; margin-bottom: 24px; color: #fff; }
+  .head .logo { width: 56px; height: 56px; border-radius: 15px; margin: 0 auto 14px;
+    background: linear-gradient(135deg, var(--amber), var(--amber-d)); display: grid; place-items: center;
+    color: #1a1206; font-weight: 800; font-size: 26px; box-shadow: 0 6px 24px rgba(245,165,36,.4); }
+  .head h1 { font-size: 24px; letter-spacing: -.02em; }
+  .head p { color: #8b94a2; font-size: 13px; margin-top: 4px; }
+  .panel { background: #fff; border-radius: 16px; padding: 26px; box-shadow: 0 20px 50px rgba(0,0,0,.4); }
+  .demo { margin-top: 16px; }
+  .demo .t { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); text-align: center; margin-bottom: 10px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+  .chip { font-size: 11.5px; padding: 5px 10px; border-radius: 20px; border: 1px solid var(--card-line);
+    background: #f7f8fa; cursor: pointer; font-weight: 600; }
+  .chip:hover { background: var(--amber-soft); border-color: var(--amber); }
+  .err { color: var(--red); font-size: 13px; margin-top: 10px; text-align: center; min-height: 18px; }
+</style>
+</head>
+<body>
+  <div class="box">
+    <div class="head">
+      <div class="logo">C</div>
+      <h1>CoopVia</h1>
+      <p>Gestão de Transporte Corporativo</p>
+    </div>
+    <div class="panel">
+      <label class="fld"><span>Usuário</span><input id="login" autocomplete="username" placeholder="admin" autofocus></label>
+      <label class="fld"><span>Senha</span><input id="senha" type="password" autocomplete="current-password" placeholder="123"></label>
+      <button class="btn pri block" style="padding:11px" onclick="entrar()">Entrar</button>
+      <div class="err" id="err"></div>
+      <div class="demo">
+        <div class="t">Acesso demo — toque para preencher</div>
+        <div class="chips" id="chips"></div>
+      </div>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+  <script src="db.js"></script>
+  <script>
+    DB.get(); // garante seed
+    const demos = [
+      ["Admin","admin"],["Operador","operador"],["Financeiro","financeiro"],
+      ["ACELEN","acelen"],["Braskem","braskem"],["TICIANA","ticiana"],["CARLOS","carlos"]
+    ];
+    document.getElementById("chips").innerHTML = demos.map(d =>
+      `<span class="chip" onclick="preencher('${d[1]}')">${d[0]}</span>`).join("");
+    function preencher(l){ document.getElementById("login").value=l; document.getElementById("senha").value="123"; }
+    function entrar(){
+      const l=document.getElementById("login").value, s=document.getElementById("senha").value;
+      const u=Auth.login(l,s);
+      if(!u){ document.getElementById("err").textContent="Usuário ou senha inválidos."; return; }
+      location.href = Auth.home(u.papel);
+    }
+    document.getElementById("senha").addEventListener("keydown", e=>{ if(e.key==="Enter") entrar(); });
+  </script>
+<script>if("serviceWorker" in navigator){navigator.serviceWorker.register("sw.js").catch(()=>{});}</script>
+</body>
+</html>
