@@ -529,6 +529,7 @@ const CRUD = {
       {lb:"Valor base fixo+km",f:"valorBase",type:"number",def:0,attr:"step=0.01"},{lb:"Pedágio padrão",f:"pedagioPadrao",type:"number",def:0,attr:"step=0.01"},
       {lb:"Status",f:"status",type:"select",opts:[{v:"ativo",l:"Ativo"},{v:"inativo",l:"Inativo"}]}] },
 };
+Object.keys(CRUD).forEach(k=>{ CRUD[k].key=k; });
 ["empresas","motoristas","veiculos","funcionarios","roteiros"].forEach(k=>RENDER[k]=()=>crudList(CRUD[k]));
 
 /* ============ ROTEIRO com cálculo de KM pelo mapa (OSRM) ============ */
