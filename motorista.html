@@ -47,7 +47,6 @@ const { $, $$, esc, toast, modal, confirm } = UI;
 const { BRL, num, hoje } = DB;
 let db, MOT, VEC;
 const U = Auth.require(["motorista"]);
-if (U) init();
 function init(){
   db=DB.get(); MOT=DB.motorista(db,U.motoristaId); VEC=DB.veiculo(db,MOT.veiculoId);
   $("#motNome").textContent=MOT.nome;
@@ -187,6 +186,9 @@ R.prod=()=>{
     </div></div>
     <div class="hint" style="margin-top:12px">Sua produção é somada por período. No fechamento, a cooperativa gera seu recibo com o líquido a receber.</div>`;
 };
+
+/* inicia após tudo declarado */
+if (U) init();
 </script>
 <script>if("serviceWorker" in navigator){navigator.serviceWorker.register("sw.js").catch(()=>{});}</script>
 </body>

@@ -36,7 +36,6 @@ const { $, $$, esc, toast, modal, closeModal, confirm, bindMenu } = UI;
 const { BRL, num, hoje } = DB;
 let db;
 const U = Auth.require(["admin","operador","financeiro"]);
-if (U) init();
 
 function init(){
   db = DB.get();
@@ -620,6 +619,9 @@ RENDER.auditoria = ()=>{
     :`<div class="empty"><div class="big">❐</div>Sem registros de auditoria ainda.</div>`}
     </div></div>`;
 };
+
+/* inicia só depois de tudo declarado (evita erro de TDZ com PAGES/CRUD) */
+if (U) init();
 </script>
 <script>if("serviceWorker" in navigator){navigator.serviceWorker.register("sw.js").catch(()=>{});}</script>
 </body>

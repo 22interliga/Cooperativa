@@ -32,7 +32,6 @@ const { $, $$, esc, toast, modal, confirm, bindMenu } = UI;
 const { BRL, num, hoje } = DB;
 let db, EMP;
 const U = Auth.require(["empresa"]);
-if (U) init();
 
 function init(){
   db = DB.get();
@@ -190,6 +189,9 @@ R.fatur=()=>{
       </tbody></table>
     </div></div>`;
 };
+
+/* inicia após tudo declarado */
+if (U) init();
 </script>
 <script>if("serviceWorker" in navigator){navigator.serviceWorker.register("sw.js").catch(()=>{});}</script>
 </body>
