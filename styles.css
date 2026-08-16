@@ -254,3 +254,15 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
   .wrap { padding: 0; max-width: none; }
   .card { box-shadow: none; border: 1px solid #000; }
 }
+
+/* ---------- autocomplete de endereço ---------- */
+.ac-box {
+  position: absolute; left: 0; right: 0; top: 100%; z-index: 300;
+  background: #fff; border: 1px solid var(--card-line); border-top: none;
+  border-radius: 0 0 10px 10px; box-shadow: 0 12px 30px rgba(16,22,32,.18);
+  max-height: 240px; overflow-y: auto;
+}
+.ac-opt { padding: 10px 12px; font-size: 13px; cursor: pointer; border-bottom: 1px solid #f0f2f5; line-height: 1.35; }
+.ac-opt:last-child { border-bottom: none; }
+.ac-opt:hover, .ac-opt.on { background: var(--amber-soft); }
+.ac-loading { padding: 10px 12px; font-size: 12.5px; color: var(--muted); }

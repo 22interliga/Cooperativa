@@ -111,6 +111,39 @@
     return { km: Math.round(r.km * 10) / 10, min: Math.round(r.min), trechos, pts };
   }
 
-  g.Geo = { geocode, geocodeMany, route, calcularRota, CFG,
+  /* autocomplete: query → até 5 sugestões [{label,lat,lng}] */
+  async function suggest(query) {
+    const q = String(query || "").trim();
+    if (q.length < 4) return [];
+    const url = `${CFG.nominatim}?format=json&limit=5&countrycodes=${CFG.countrycodes}` +
+      `&addressdetails=1&q=${encodeURIComponent(q)}&email=${encodeURIComponent(CFG.email)}`;
+    try {
+      const res = await fetchT(url, { headers: { Accept: "application/json" } }, 8000);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return (data || []).map((d) => ({ label: d.display_name, lat: +d.lat, lng: +d.lon }));
+    } catch (e) { return []; }
+  }
+
+  /* rota a partir de itens que podem ser texto OU {lat,lng,label} já escolhido */
+  async function calcularRotaPts(items) {
+    const labels = items.map((it) => (typeof it === "string" ? it : (it.label || "ponto")));
+    const pts = [];
+    try {
+      for (const it of items) {
+        if (it && typeof it === "object" && it.lat != null) { pts.push(it); }
+        else { pts.push(await geocode(String(it || ""))); await sleep(CFG.delayMs); }
+      }
+    } catch (e) { return { erro: e.message }; }
+    const faltando = labels.filter((_, i) => !pts[i]);
+    if (faltando.length) return { erro: "Endereço não localizado: " + faltando.join(" · ") };
+    let r;
+    try { r = await route(pts); } catch (e) { return { erro: e.message }; }
+    if (!r) return { erro: "OSRM não retornou rota para estes pontos." };
+    const trechos = r.legs.map((km, i) => ({ de: labels[i], para: labels[i + 1], km: Math.round(km * 10) / 10 }));
+    return { km: Math.round(r.km * 10) / 10, min: Math.round(r.min), trechos, pts };
+  }
+
+  g.Geo = { geocode, geocodeMany, route, calcularRota, calcularRotaPts, suggest, CFG,
     limparCache: () => localStorage.removeItem(CACHEKEY) };
 })(window);

@@ -30,6 +30,7 @@
   </main>
 </div>
 <script src="db.js"></script>
+<script src="geo.js"></script>
 <script src="ui.js"></script>
 <script>
 const { $, $$, esc, toast, modal, closeModal, confirm, bindMenu } = UI;
@@ -569,6 +570,54 @@ function formRoteiro(id){
     {label:"Salvar roteiro", cls:"pri", onClick:()=>salvarRoteiro(id)}
   ], {wide:true});
   toggleModelo();
+  // autocomplete de endereço (origem e destino) + guarda coordenadas escolhidas
+  window.__rotCoords = { origem: (o.origemPt||null), destino: (o.destinoPt||null) };
+  attachAutocomplete($("#r_ori"), pt => window.__rotCoords.origem = pt);
+  attachAutocomplete($("#r_dst"), pt => window.__rotCoords.destino = pt);
+}
+
+/* autocomplete reutilizável: busca no Nominatim enquanto digita */
+function attachAutocomplete(input, onPick){
+  if(!input) return;
+  const GEO = (typeof Geo!=="undefined") ? Geo : window.Geo; // referência estável p/ o timer
+  input.setAttribute("autocomplete","off");
+  input.parentElement.style.position = "relative";
+  let box=null, timer=null, items=[], active=-1;
+  const close=()=>{ if(box){box.remove();box=null;} items=[]; active=-1; };
+  const render=(loading)=>{
+    close();
+    box=document.createElement("div"); box.className="ac-box";
+    if(loading){ box.innerHTML=`<div class="ac-loading">🔎 buscando endereços…</div>`; }
+    else if(!items.length){ box.innerHTML=`<div class="ac-loading">Nenhum endereço encontrado</div>`; }
+    else items.forEach((it,i)=>{
+      const opt=document.createElement("div"); opt.className="ac-opt"; opt.textContent=it.label;
+      opt.onmousedown=(e)=>{ e.preventDefault(); input.value=it.label; onPick(it); close(); };
+      box.appendChild(opt);
+    });
+    input.parentElement.appendChild(box);
+  };
+  input.addEventListener("input", ()=>{
+    onPick(null); // digitou de novo → invalida a coordenada escolhida antes
+    clearTimeout(timer);
+    const q=input.value.trim();
+    if(q.length<4){ close(); return; }
+    render(true);
+    timer=setTimeout(async()=>{
+      const res=await GEO.suggest(q);
+      if(input.value.trim().length<4){ close(); return; }
+      items=res; render(false);
+    }, 700);
+  });
+  input.addEventListener("keydown",(e)=>{
+    if(!box) return;
+    const opts=[...box.querySelectorAll(".ac-opt")];
+    if(e.key==="ArrowDown"){ e.preventDefault(); active=Math.min(active+1,opts.length-1); }
+    else if(e.key==="ArrowUp"){ e.preventDefault(); active=Math.max(active-1,0); }
+    else if(e.key==="Enter" && active>=0 && items[active]){ e.preventDefault(); input.value=items[active].label; onPick(items[active]); close(); return; }
+    else if(e.key==="Escape"){ close(); return; }
+    opts.forEach((o,i)=>o.classList.toggle("on",i===active));
+  });
+  input.addEventListener("blur", ()=>setTimeout(close,180));
 }
 function toggleModelo(){
   const m=$("#r_mod").value;
@@ -584,12 +633,17 @@ async function calcMapaRoteiro(){
   btn.disabled=true; const txt=btn.textContent; btn.textContent="Calculando…";
   out.classList.remove("hidden");
   out.innerHTML="🔎 Localizando endereços e traçando a rota… <span class='muted'>(cada ponto novo leva ~1s)</span>";
-  const enderecos=[ori, ...pts, dst];
-  const r=await Geo.calcularRota(enderecos);
+  // usa coordenada já escolhida no autocomplete quando houver (mais rápido/preciso)
+  const C=window.__rotCoords||{};
+  const origemItem = (C.origem && C.origem.lat!=null) ? {lat:C.origem.lat,lng:C.origem.lng,label:ori} : ori;
+  const destinoItem = (C.destino && C.destino.lat!=null) ? {lat:C.destino.lat,lng:C.destino.lng,label:dst} : dst;
+  const itens=[origemItem, ...pts, destinoItem];
+  const r=await Geo.calcularRotaPts(itens);
   btn.disabled=false; btn.textContent=txt;
-  if(r.erro){ out.style.borderColor="var(--red)"; out.innerHTML="⚠ "+esc(r.erro)+"<br><small class='muted'>Dica: inclua cidade e UF (ex.: “Candeias BA”). Você também pode digitar o KM manualmente.</small>"; return; }
+  if(r.erro){ out.style.borderColor="var(--red)"; out.style.background="#fff"; out.innerHTML="⚠ "+esc(r.erro)+"<br><small class='muted'>Dica: escolha o endereço na lista de sugestões, ou inclua cidade e UF (ex.: “Candeias BA”). Você também pode digitar o KM manualmente.</small>"; return; }
   out.style.borderColor="var(--amber)"; out.style.background="var(--amber-soft)";
   $("#r_km").value=r.km;
+  window.__rotResolved = r.pts; // guarda p/ salvar coords
   const trechos=r.trechos.map(t=>`<div class="row" style="font-size:12px"><span>${esc(t.de)} → ${esc(t.para)}</span><span class="spacer"></span><b class="mono">${t.km} km</b></div>`).join("");
   out.innerHTML=`${trechos}<div class="divide" style="margin:8px 0"></div><div class="row"><b>Total da rota</b><span class="spacer"></span><b class="money-lg" style="font-size:16px">${r.km} km</b> <span class="muted">· ~${r.min} min</span></div>`;
   toast("KM calculado pelo mapa");
@@ -604,6 +658,10 @@ function salvarRoteiro(id){
     valorFixo:num($("#r_fixo").value), valorBase:num($("#r_base").value), valorPorKm:num($("#r_pkm").value),
     pedagioPadrao:num($("#r_ped").value), status:$("#r_st").value,
   });
+  // guarda coordenadas escolhidas (origem/destino) p/ reuso
+  const C=window.__rotCoords||{};
+  if(C.origem&&C.origem.lat!=null) o.origemPt={lat:C.origem.lat,lng:C.origem.lng};
+  if(C.destino&&C.destino.lat!=null) o.destinoPt={lat:C.destino.lat,lng:C.destino.lng};
   if(!id) db.roteiros.push(o);
   DB.save(db); DB.log(db,(id?"Editou ":"Cadastrou ")+"roteiro", o.nome);
   toast("Roteiro salvo"); RENDER.roteiros();
