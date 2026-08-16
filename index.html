@@ -549,7 +549,7 @@ function formRoteiro(id){
     <label class="fld"><span>Pontos de embarque intermediários <small class="muted">(um endereço por linha, opcional)</small></span>
       <textarea id="r_pontos" rows="3" placeholder="Rua A, 100 — Candeias BA&#10;Rua B, 250 — Candeias BA">${esc(pontos)}</textarea></label>
     <div class="row" style="gap:10px;align-items:flex-end">
-      <label class="fld" style="flex:1;margin:0"><span>KM padrão</span><input type="number" id="r_km" step="0.1" value="${esc(g('kmPadrao'))}"></label>
+      <label class="fld" style="flex:1;margin:0"><span>KM padrão</span><input type="number" id="r_km" step="0.1" value="${esc(g('kmPadrao'))}" oninput="previewRoteiro()"></label>
       <button type="button" class="btn dark" id="r_calc" onclick="calcMapaRoteiro()">🗺️ Calcular pelo mapa (OSRM)</button>
     </div>
     <div id="r_mapaOut" class="hint hidden" style="margin-top:8px"></div>
@@ -560,11 +560,12 @@ function formRoteiro(id){
       <option value="fixo_km" ${modelo==='fixo_km'?'selected':''}>Fixo + KM</option></select></label>
       <label class="fld"><span>Pedágio padrão</span><input type="number" id="r_ped" step="0.01" value="${g('pedagioPadrao',0)}"></label></div>
     <div class="frow g3">
-      <label class="fld" id="wrap_fixo"><span>Valor fixo (R$)</span><input type="number" id="r_fixo" step="0.01" value="${g('valorFixo',0)}"></label>
-      <label class="fld" id="wrap_base"><span>Valor base (R$)</span><input type="number" id="r_base" step="0.01" value="${g('valorBase',0)}"></label>
-      <label class="fld" id="wrap_pkm"><span>Valor por KM (R$)</span><input type="number" id="r_pkm" step="0.01" value="${g('valorPorKm',1.8)}"></label></div>
+      <label class="fld" id="wrap_fixo"><span>Valor fixo (R$)</span><input type="number" id="r_fixo" step="0.01" value="${g('valorFixo',0)}" oninput="previewRoteiro()"></label>
+      <label class="fld" id="wrap_base"><span>Valor base (R$)</span><input type="number" id="r_base" step="0.01" value="${g('valorBase',0)}" oninput="previewRoteiro()"></label>
+      <label class="fld" id="wrap_pkm"><span>Valor por KM (R$)</span><input type="number" id="r_pkm" step="0.01" value="${g('valorPorKm',1.8)}" oninput="previewRoteiro()"></label></div>
+    <div class="hint" id="r_preview" style="background:#eef6ff;border-color:#cfe0f7;color:#1a3f6b"></div>
     <label class="fld"><span>Status</span><select id="r_st"><option value="ativo" ${g('status')!=='inativo'?'selected':''}>Ativo</option><option value="inativo" ${g('status')==='inativo'?'selected':''}>Inativo</option></select></label>
-    <div class="hint">O KM previsto de cada boletim virá deste KM padrão. O botão do mapa usa Nominatim + OSRM (grátis) — servidores demo têm limite de uso; em produção troque pelo servidor próprio em <span class="mono">geo.js → Geo.CFG</span>.</div>`;
+    <div class="hint">O KM previsto de cada boletim virá deste KM padrão. Busca de endereço via Photon + distância via OSRM (grátis) — servidores demo têm limite de uso; em produção troque pelo servidor próprio em <span class="mono">geo.js → Geo.CFG</span>.</div>`;
   modal(id?"Editar roteiro":"Novo roteiro", body, [
     {label:"Cancelar"},
     {label:"Salvar roteiro", cls:"pri", onClick:()=>salvarRoteiro(id)}
@@ -574,6 +575,17 @@ function formRoteiro(id){
   window.__rotCoords = { origem: (o.origemPt||null), destino: (o.destinoPt||null) };
   attachAutocomplete($("#r_ori"), pt => window.__rotCoords.origem = pt);
   attachAutocomplete($("#r_dst"), pt => window.__rotCoords.destino = pt);
+}
+// prévia ao vivo da corrida (funciona em qualquer modelo de remuneração)
+function previewRoteiro(){
+  const el=$("#r_preview"); if(!el) return;
+  const modelo=$("#r_mod").value, km=num($("#r_km").value);
+  const rFake={ modelo, valorFixo:num($("#r_fixo").value), valorBase:num($("#r_base").value), valorPorKm:num($("#r_pkm").value) };
+  const corrida=DB.valorCorrida(rFake, km);
+  const detalhe = modelo==="km" ? `${km} km × ${BRL(rFake.valorPorKm)}/km`
+    : modelo==="fixo_km" ? `${BRL(rFake.valorBase)} + ${km} km × ${BRL(rFake.valorPorKm)}/km`
+    : `valor fixo`;
+  el.innerHTML = `<b>Corrida estimada:</b> ${BRL(corrida)} <span class="muted">(${detalhe}${km?"":" — informe o KM"})</span>`;
 }
 
 /* autocomplete reutilizável: busca no Nominatim enquanto digita */
@@ -627,6 +639,7 @@ function toggleModelo(){
   $("#wrap_fixo").style.display = (m==='fixo'||m==='fixo_km')?'block':'none';
   $("#wrap_base").style.display = (m==='fixo_km')?'block':'none';
   $("#wrap_pkm").style.display  = (m==='km'||m==='fixo_km')?'block':'none';
+  previewRoteiro();
 }
 async function calcMapaRoteiro(){
   const ori=$("#r_ori").value.trim(), dst=$("#r_dst").value.trim();
@@ -645,7 +658,7 @@ async function calcMapaRoteiro(){
   btn.disabled=false; btn.textContent=txt;
   if(r.erro){ out.style.borderColor="var(--red)"; out.style.background="#fff"; out.innerHTML="⚠ "+esc(r.erro)+"<br><small class='muted'>Dica: escolha o endereço na lista de sugestões, ou inclua cidade e UF (ex.: “Candeias BA”). Você também pode digitar o KM manualmente.</small>"; return; }
   out.style.borderColor="var(--amber)"; out.style.background="var(--amber-soft)";
-  $("#r_km").value=r.km;
+  $("#r_km").value=r.km; previewRoteiro();
   window.__rotResolved = r.pts; // guarda p/ salvar coords
   const trechos=r.trechos.map(t=>`<div class="row" style="font-size:12px"><span>${esc(t.de)} → ${esc(t.para)}</span><span class="spacer"></span><b class="mono">${t.km} km</b></div>`).join("");
   out.innerHTML=`${trechos}<div class="divide" style="margin:8px 0"></div><div class="row"><b>Total da rota</b><span class="spacer"></span><b class="money-lg" style="font-size:16px">${r.km} km</b> <span class="muted">· ~${r.min} min</span></div>`;
