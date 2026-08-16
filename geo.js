@@ -25,7 +25,16 @@
   const norm = (s) => String(s || "").trim().toLowerCase();
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  /* endereço → {lat,lng,label} | null  (com cache) */
+  /* fetch com tempo limite — nunca trava indefinidamente */
+  async function fetchT(url, opts, ms = 12000) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), ms);
+    try {
+      return await fetch(url, Object.assign({ signal: ctrl.signal }, opts || {}));
+    } finally { clearTimeout(t); }
+  }
+
+  /* endereço → {lat,lng,label} | null  (com cache). Lança em falha de rede/HTTP. */
   async function geocode(address) {
     const key = norm(address);
     if (!key) return null;
@@ -33,14 +42,18 @@
     if (cache[key]) return cache[key];
     const url = `${CFG.nominatim}?format=json&limit=1&countrycodes=${CFG.countrycodes}` +
       `&q=${encodeURIComponent(address)}&email=${encodeURIComponent(CFG.email)}`;
+    let res;
     try {
-      const res = await fetch(url, { headers: { Accept: "application/json" } });
-      const data = await res.json();
-      if (!data || !data.length) return null;
-      const pt = { lat: +data[0].lat, lng: +data[0].lon, label: data[0].display_name };
-      cache[key] = pt; cacheSet(cache);
-      return pt;
-    } catch (e) { return null; }
+      res = await fetchT(url, { headers: { Accept: "application/json" } });
+    } catch (e) {
+      throw new Error(e.name === "AbortError" ? "tempo esgotado ao localizar endereços" : "falha de rede ao localizar endereços");
+    }
+    if (!res.ok) throw new Error("Nominatim respondeu " + res.status + (res.status === 403 || res.status === 429 ? " (limite do servidor público)" : ""));
+    const data = await res.json();
+    if (!data || !data.length) return null; // não encontrado (≠ erro)
+    const pt = { lat: +data[0].lat, lng: +data[0].lon, label: data[0].display_name };
+    cache[key] = pt; cacheSet(cache);
+    return pt;
   }
 
   /* vários endereços em sequência (respeitando 1 req/s; usa cache) */
@@ -62,28 +75,38 @@
     if (valid.length < 2) return null;
     const coords = valid.map((p) => `${p.lng},${p.lat}`).join(";"); // OSRM = lng,lat
     const url = `${CFG.osrm}/${coords}?overview=false`;
+    let res;
     try {
-      const res = await fetch(url);
-      const data = await res.json();
-      if (data.code !== "Ok" || !data.routes || !data.routes.length) return null;
-      const r = data.routes[0];
-      return {
-        km: r.distance / 1000,
-        min: r.duration / 60,
-        legs: (r.legs || []).map((l) => l.distance / 1000),
-      };
-    } catch (e) { return null; }
+      res = await fetchT(url);
+    } catch (e) {
+      throw new Error(e.name === "AbortError" ? "tempo esgotado no cálculo da rota (OSRM)" : "falha de rede no OSRM");
+    }
+    if (!res.ok) throw new Error("OSRM respondeu " + res.status);
+    const data = await res.json();
+    if (data.code !== "Ok" || !data.routes || !data.routes.length) return null;
+    const r = data.routes[0];
+    return { km: r.distance / 1000, min: r.duration / 60, legs: (r.legs || []).map((l) => l.distance / 1000) };
   }
 
   /* pipeline completo: lista de endereços → {km, trechos:[{de,para,km}], min} | {erro} */
   async function calcularRota(enderecos) {
     const lista = enderecos.map((e) => String(e || "").trim()).filter(Boolean);
     if (lista.length < 2) return { erro: "Informe pelo menos origem e destino." };
-    const pts = await geocodeMany(lista);
+    let pts;
+    try {
+      pts = await geocodeMany(lista);
+    } catch (e) {
+      return { erro: e.message };
+    }
     const faltando = lista.filter((_, i) => !pts[i]);
-    if (faltando.length) return { erro: "Endereço não localizado: " + faltando.join(" · "), pts };
-    const r = await route(pts);
-    if (!r) return { erro: "OSRM não retornou rota. Verifique conexão e tente de novo.", pts };
+    if (faltando.length) return { erro: "Endereço não localizado: " + faltando.join(" · ") };
+    let r;
+    try {
+      r = await route(pts);
+    } catch (e) {
+      return { erro: e.message };
+    }
+    if (!r) return { erro: "OSRM não retornou rota para estes pontos." };
     const trechos = r.legs.map((km, i) => ({ de: lista[i], para: lista[i + 1], km: Math.round(km * 10) / 10 }));
     return { km: Math.round(r.km * 10) / 10, min: Math.round(r.min), trechos, pts };
   }
