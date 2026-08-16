@@ -308,7 +308,15 @@
   const DB = {
     NS,
     get() {
-      return load() || seed();
+      const db = load();
+      if (!db) return seed();
+      // migração leve: garante coleções novas em dados antigos
+      let changed = false;
+      ["contratos", "fechamentos", "ocorrencias", "auditoria", "solicitacoes", "roteiros"].forEach((k) => {
+        if (!Array.isArray(db[k])) { db[k] = []; changed = true; }
+      });
+      if (changed) save(db);
+      return db;
     },
     save,
     reset() {

@@ -55,7 +55,7 @@ const PAGES = [
   { id:"escala", grp:"Operação", ic:"▦", label:"Escala do dia", roles:["admin","operador"] },
   { id:"solic", grp:"Operação", ic:"✉", label:"Solicitações", roles:["admin","operador"] },
   { id:"fechamento", grp:"Financeiro", ic:"$", label:"Fechamento & Recibo", roles:["admin","financeiro"] },
-  { id:"contratos", grp:"Financeiro", ic:"§", label:"Contratos", roles:["admin","financeiro"] },
+  { id:"contratos", grp:"Financeiro", ic:"§", label:"Contratos", roles:["admin","operador","financeiro"] },
   { id:"rentab", grp:"Financeiro", ic:"▲", label:"Rentabilidade", roles:["admin","financeiro"] },
   { id:"roteiros", grp:"Cadastros", ic:"⇄", label:"Roteiros", roles:["admin","operador"] },
   { id:"empresas", grp:"Cadastros", ic:"▣", label:"Empresas", roles:["admin"] },
@@ -686,7 +686,7 @@ function salvarRoteiro(id){
 
 /* ============ CONTRATOS (o que a empresa paga) ============ */
 RENDER.contratos = ()=>{
-  const list=[...db.contratos].sort((a,b)=>nomeEmp(a.empresaId).localeCompare(nomeEmp(b.empresaId)));
+  const list=[...(db.contratos||[])].sort((a,b)=>nomeEmp(a.empresaId).localeCompare(nomeEmp(b.empresaId)));
   const mlabel=(m)=>DB.MODELOS_FATURA[m]||m;
   const taxaTxt=(c)=>c.modelo==="mensal_fixo"?BRL(c.valor)+"/mês":c.modelo==="por_km"?BRL(c.valor)+"/km":c.modelo==="por_funcionario"?BRL(c.valor)+"/func.":c.modelo==="por_viagem"?BRL(c.valor)+"/viagem":BRL(c.valor)+"/rota";
   $("#view").innerHTML=`
