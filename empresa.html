@@ -167,27 +167,36 @@ function novaSolic(){
 }
 
 R.fatur=()=>{
-  const func=meusFunc().filter(f=>f.status==="ativo").length;
-  const vFeitas=minhasViagens().filter(v=>v.status==="concluida").length;
-  // faturamento na ótica da EMPRESA — valor contratado, não custo interno
-  const valorFuncionario = 320; // demo: valor mensal por funcionário contratado
-  const valorContratado = func*valorFuncionario;
+  const con=DB.contratoAtivo(db, U.empresaId);
+  if(!con){
+    $("#view").innerHTML=`<div class="pagehd"><h2>Faturamento</h2></div>
+      <div class="empty"><div class="big">§</div>Nenhum contrato ativo no momento.<br><small>Fale com a cooperativa para ativar seu contrato.</small></div>`;
+    return;
+  }
+  // período: mês corrente
+  const d=new Date(); const ini=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-01`;
+  const fim=hoje();
+  const f=DB.faturarEmpresa(db, U.empresaId, ini, fim, con);
+  const kpi=(lb,vl,cls="")=>`<div class="card kpi"><div class="lb">${lb}</div><div class="vl ${cls}">${vl}</div></div>`;
   $("#view").innerHTML=`
     <div class="pagehd"><h2>Faturamento</h2></div>
     <div class="grid g3" style="margin-bottom:16px">
-      <div class="card kpi"><div class="lb">Funcionários contratados</div><div class="vl">${func}</div></div>
-      <div class="card kpi"><div class="lb">Viagens no período</div><div class="vl blue">${vFeitas}</div></div>
-      <div class="card kpi"><div class="lb">Valor contratado / mês</div><div class="vl amber">${BRL(valorContratado)}</div></div>
+      ${kpi("Modelo do contrato", f.modeloLabel)}
+      ${kpi(`Utilização (${f.unidade})`, f.modelo==="mensal_fixo"?"—":f.qtd, "blue")}
+      ${kpi("Valor do período", BRL(f.total), "amber")}
     </div>
-    <div class="card"><div class="hd"><h3>Modelo de cobrança</h3></div><div class="bd">
+    <div class="card"><div class="hd"><h3>Detalhe da cobrança</h3></div><div class="bd">
       <table><tbody>
         <tr><th>Empresa</th><td>${esc(EMP.nome)}</td></tr>
         <tr><th>CNPJ</th><td class="mono">${esc(EMP.cnpj)}</td></tr>
-        <tr><th>Modelo</th><td>Valor mensal por funcionário — ${BRL(valorFuncionario)}/funcionário</td></tr>
-        <tr><th>Funcionários ativos</th><td>${func}</td></tr>
-        <tr><th>Total do mês</th><td><b class="money-lg" style="font-size:18px">${BRL(valorContratado)}</b></td></tr>
+        <tr><th>Contrato</th><td class="mono">${esc(con.numero)}</td></tr>
+        <tr><th>Modelo</th><td>${esc(f.modeloLabel)} — ${BRL(f.taxa)}${f.modelo==='mensal_fixo'?'/mês':' por '+f.unidade}</td></tr>
+        <tr><th>Período</th><td>${ini.split("-").reverse().join("/")} a ${fim.split("-").reverse().join("/")}</td></tr>
+        ${f.modelo!=="mensal_fixo"?`<tr><th>Utilização</th><td>${f.qtd} ${esc(f.unidade)}</td></tr>`:""}
+        <tr><th>Total do período</th><td><b class="money-lg" style="font-size:18px">${BRL(f.total)}</b></td></tr>
       </tbody></table>
-    </div></div>`;
+    </div></div>
+    <div class="hint" style="margin-top:12px">Este é o valor que sua empresa paga pelo serviço, conforme o contrato. Custos internos da cooperativa (remuneração de motoristas etc.) não fazem parte deste valor.</div>`;
 };
 
 /* inicia após tudo declarado */

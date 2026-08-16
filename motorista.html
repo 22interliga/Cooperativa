@@ -36,8 +36,10 @@
   <div class="mhead"><div class="logo">C</div><div style="flex:1"><b id="motNome">Motorista</b><small id="motVec"></small></div>
     <button class="btn ghost sm" style="color:#cfd6e0;border-color:#303945" onclick="Auth.logout()">Sair</button></div>
   <div class="mtabs">
-    <div class="mtab on" data-t="hoje" onclick="tab('hoje')">Minha viagem</div>
-    <div class="mtab" data-t="prod" onclick="tab('prod')">Minha produção</div>
+    <div class="mtab on" data-t="agenda" onclick="tab('agenda')">Agenda</div>
+    <div class="mtab" data-t="corrida" onclick="tab('corrida')">Corrida</div>
+    <div class="mtab" data-t="fin" onclick="tab('fin')">Financeiro</div>
+    <div class="mtab" data-t="perfil" onclick="tab('perfil')">Perfil</div>
   </div>
   <div class="mwrap" id="view"></div>
 <script src="db.js"></script>
@@ -51,16 +53,39 @@ function init(){
   db=DB.get(); MOT=DB.motorista(db,U.motoristaId); VEC=DB.veiculo(db,MOT.veiculoId);
   $("#motNome").textContent=MOT.nome;
   $("#motVec").textContent=VEC?`${VEC.modelo} · ${VEC.placa}`:"";
-  tab("hoje");
+  tab("agenda");
 }
 function tab(t){ $$(".mtab").forEach(x=>x.classList.toggle("on",x.dataset.t===t)); db=DB.get(); R[t](); }
 const R={};
 
-R.hoje=()=>{
+/* ===== AGENDA — próximas viagens (hoje + próximos dias) ===== */
+R.agenda=()=>{
+  const d=hoje();
+  const futuras=db.viagens.filter(v=>v.motoristaId===U.motoristaId && v.data>=d && v.status!=="cancelada" && v.status!=="concluida")
+    .sort((a,b)=>a.data.localeCompare(b.data)||a.horaSaida.localeCompare(b.horaSaida));
+  const porDia={};
+  futuras.forEach(v=>{ (porDia[v.data]=porDia[v.data]||[]).push(v); });
+  const dias=Object.keys(porDia).sort();
+  const nome=(dt)=>{ if(dt===d) return "Hoje"; const t=new Date(d); t.setDate(t.getDate()+1);
+    if(dt===t.toISOString().slice(0,10)) return "Amanhã"; return dt.split("-").reverse().join("/"); };
+  $("#view").innerHTML = dias.length ? dias.map(dt=>`
+    <div style="margin-bottom:16px">
+      <div class="row" style="margin-bottom:8px"><b style="font-size:15px">${nome(dt)}</b><span class="spacer"></span><span class="badge gray">${porDia[dt].length} viagem(ns)</span></div>
+      ${porDia[dt].map(v=>`
+        <div class="card" style="margin-bottom:8px"><div class="bd">
+          <div class="row"><div class="mono" style="font-size:18px;font-weight:800">${v.horaSaida}</div>
+            <div style="margin-left:12px"><b>${esc(v.roteiroNome)}</b><div class="muted" style="font-size:12px">${esc((DB.empresa(db,v.empresaId)||{}).nome||'')} · ${v.passageiros} passageiros · ${v.kmPrevisto} km</div></div>
+            <span class="spacer"></span>${dt===d?`<span class="badge blue">Hoje</span>`:""}</div>
+        </div></div>`).join("")}
+    </div>`).join("") : `<div class="empty" style="margin-top:40px"><div class="big">▦</div>Nenhuma viagem agendada.<br><small>Sua agenda está livre.</small></div>`;
+};
+
+/* ===== CORRIDA — viagem do dia (embarque, KM, adicionais) ===== */
+R.corrida=()=>{
   const d=hoje();
   const list=db.viagens.filter(v=>v.motoristaId===U.motoristaId && v.data===d && v.status!=="cancelada")
     .sort((a,b)=>a.horaSaida.localeCompare(b.horaSaida));
-  if(!list.length){ $("#view").innerHTML=`<div class="empty" style="margin-top:40px"><div class="big">◈</div>Nenhuma viagem escalada para hoje.<br><small>Aproveite o descanso.</small></div>`; return; }
+  if(!list.length){ $("#view").innerHTML=`<div class="empty" style="margin-top:40px"><div class="big">◈</div>Nenhuma viagem para hoje.<br><small>Aproveite o descanso.</small></div>`; return; }
   $("#view").innerHTML=list.map(v=>cardViagem(v)).join("");
 };
 
@@ -113,7 +138,7 @@ function iniciar(id){
       v.kmInicial=num($("#kmi").value); v.status="andamento";
       const ve=DB.veiculo(db,v.veiculoId); if(ve) ve.status="em_viagem";
       DB.save(db); DB.log(db,"Viagem iniciada",`Boletim ${v.boletim} — KM inicial ${v.kmInicial}`);
-      toast("Viagem iniciada"); R.hoje();
+      toast("Viagem iniciada"); R.corrida();
     }}]);
 }
 function marcar(vid,fid,st){
@@ -121,7 +146,7 @@ function marcar(vid,fid,st){
   const e=v.embarques.find(x=>x.funcionarioId===fid); if(!e) return;
   e.status = e.status===st ? "aguardando" : st;
   e.registro={data:hoje(),hora:new Date().toLocaleTimeString("pt-BR").slice(0,5)};
-  DB.save(db); R.hoje();
+  DB.save(db); R.corrida();
 }
 function adicionais(id){
   const v=db.viagens.find(x=>x.id===id);
@@ -134,7 +159,7 @@ function adicionais(id){
     <div class="hint">Guarde os comprovantes. Eles entram no total da viagem e na sua produção.</div>`,
     [{label:"Cancelar"},{label:"Salvar", cls:"pri", onClick:()=>{
       v.pedagio=num($("#a_ped").value); v.estacionamento=num($("#a_est").value); v.hora=num($("#a_hora").value);
-      v.total=DB.totalViagem(v); DB.save(db); toast("Adicionais salvos"); R.hoje();
+      v.total=DB.totalViagem(v); DB.save(db); toast("Adicionais salvos"); R.corrida();
     }}]);
 }
 function finalizar(id){
@@ -156,7 +181,7 @@ function finalizar(id){
       v.total=DB.totalViagem(v); v.status="concluida";
       const ve=DB.veiculo(db,v.veiculoId); if(ve){ ve.status="disponivel"; ve.km=kmf; }
       DB.save(db); DB.log(db,"Viagem concluída",`Boletim ${v.boletim} — KM real ${kmr} (prev ${v.kmPrevisto})`);
-      toast("Viagem finalizada"); R.hoje();
+      toast("Viagem finalizada"); R.corrida();
     }}]);
   // mostra cálculo dinâmico
   setTimeout(()=>{
@@ -168,23 +193,65 @@ function finalizar(id){
   },30);
 }
 
-R.prod=()=>{
+/* ===== FINANCEIRO — produção + fechamentos/recibos ===== */
+R.fin=()=>{
   const vs=db.viagens.filter(v=>v.motoristaId===U.motoristaId && v.status==="concluida")
     .sort((a,b)=>b.data.localeCompare(a.data));
-  const tot=vs.reduce((a,v)=>({km:a.km+num(v.kmRealizado||v.kmPrevisto),ped:a.ped+num(v.pedagio),total:a.total+DB.totalViagem(v)}),{km:0,ped:0,total:0});
+  const fechs=(db.fechamentos||[]).filter(f=>f.motoristaId===U.motoristaId).sort((a,b)=>(b.ts||"").localeCompare(a.ts||""));
+  // produção ainda NÃO fechada
+  const abertas=vs.filter(v=>!v.fechado);
+  const totAberto=abertas.reduce((a,v)=>({km:a.km+num(v.kmRealizado||v.kmPrevisto),total:a.total+DB.totalViagem(v)}),{km:0,total:0});
+  const kpi=(lb,vl,cls="")=>`<div class="card kpi"><div class="lb">${lb}</div><div class="vl ${cls}" style="font-size:20px">${vl}</div></div>`;
   $("#view").innerHTML=`
     <div class="grid g3" style="margin-bottom:14px">
-      <div class="card kpi"><div class="lb">Corridas</div><div class="vl">${vs.length}</div></div>
-      <div class="card kpi"><div class="lb">KM rodados</div><div class="vl amber" style="font-size:22px">${tot.km}</div></div>
-      <div class="card kpi"><div class="lb">Total produzido</div><div class="vl green" style="font-size:20px">${BRL(tot.total)}</div></div>
+      ${kpi("Corridas a fechar", abertas.length)}
+      ${kpi("KM a fechar", totAberto.km, "amber")}
+      ${kpi("A receber (aberto)", BRL(totAberto.total), "green")}
     </div>
-    <div class="card"><div class="hd"><h3>Minhas corridas</h3></div><div class="bd" style="padding:0">
-    ${vs.length?`<table><thead><tr><th>Data</th><th>Roteiro</th><th class="num">KM</th><th class="num">Corrida</th><th class="num">Total</th></tr></thead>
+    <div class="card" style="margin-bottom:14px"><div class="hd"><h3>Meus recibos</h3></div><div class="bd" style="padding:0">
+    ${fechs.length?`<table><thead><tr><th>Período</th><th class="num">Corridas</th><th class="num">Líquido</th></tr></thead>
+      <tbody>${fechs.map(f=>`<tr><td class="mono" style="font-size:12px">${(f.ini||"").split("-").reverse().join("/")} a ${(f.fim||"").split("-").reverse().join("/")}</td><td class="num">${f.qtd}</td><td class="num"><b style="color:var(--green)">${BRL(f.liquido)}</b></td></tr>`).join("")}</tbody></table>`
+    :`<div class="empty" style="padding:20px"><div class="muted">Nenhum fechamento gerado ainda pela cooperativa.</div></div>`}
+    </div></div>
+    <div class="card"><div class="hd"><h3>Corridas concluídas</h3></div><div class="bd" style="padding:0">
+    ${vs.length?`<table><thead><tr><th>Data</th><th>Roteiro</th><th class="num">KM</th><th class="num">Total</th><th></th></tr></thead>
     <tbody>${vs.map(v=>`<tr><td class="mono">${v.data.split("-").reverse().join("/")}</td><td>${esc(v.roteiroNome)}</td>
-      <td class="num">${v.kmRealizado||v.kmPrevisto}</td><td class="num">${BRL(v.valorCorrida)}</td><td class="num"><b>${BRL(DB.totalViagem(v))}</b></td></tr>`).join("")}</tbody></table>`
+      <td class="num">${v.kmRealizado||v.kmPrevisto}</td><td class="num"><b>${BRL(DB.totalViagem(v))}</b></td>
+      <td>${v.fechado?'<span class="badge gray">Fechado</span>':'<span class="badge amber">Aberto</span>'}</td></tr>`).join("")}</tbody></table>`
     :`<div class="empty"><div class="big">▤</div>Nenhuma corrida concluída ainda.</div>`}
     </div></div>
-    <div class="hint" style="margin-top:12px">Sua produção é somada por período. No fechamento, a cooperativa gera seu recibo com o líquido a receber.</div>`;
+    <div class="hint" style="margin-top:12px">O valor a receber é somado por período. A cooperativa fecha o período e gera seu recibo com o líquido.</div>`;
+};
+
+/* ===== PERFIL — dados do motorista, veículo, documentos, ocorrências ===== */
+R.perfil=()=>{
+  const venceCnh = MOT.validadeCnh ? new Date(MOT.validadeCnh) : null;
+  const diasCnh = venceCnh ? Math.round((venceCnh - new Date())/86400000) : null;
+  const cnhBadge = diasCnh==null?"":diasCnh<0?`<span class="badge red">Vencida</span>`:diasCnh<30?`<span class="badge amber">Vence em ${diasCnh}d</span>`:`<span class="badge green">Em dia</span>`;
+  const ocs=(db.ocorrencias||[]).filter(o=>o.motoristaId===U.motoristaId);
+  $("#view").innerHTML=`
+    <div class="card" style="margin-bottom:14px"><div class="hd"><h3>Meus dados</h3></div><div class="bd" style="padding:0">
+      <table><tbody>
+        <tr><th>Nome</th><td>${esc(MOT.nome)}</td></tr>
+        <tr><th>CPF</th><td class="mono">${esc(MOT.cpf||'—')}</td></tr>
+        <tr><th>Telefone</th><td class="mono">${esc(MOT.telefone||'—')}</td></tr>
+        <tr><th>CNH</th><td class="mono">${esc(MOT.cnh||'—')} · cat. ${esc(MOT.categoria||'—')}</td></tr>
+        <tr><th>Validade CNH</th><td>${MOT.validadeCnh?MOT.validadeCnh.split("-").reverse().join("/"):'—'} ${cnhBadge}</td></tr>
+      </tbody></table>
+    </div></div>
+    <div class="card" style="margin-bottom:14px"><div class="hd"><h3>Meu veículo</h3></div><div class="bd" style="padding:0">
+    ${VEC?`<table><tbody>
+        <tr><th>Veículo</th><td>${esc(VEC.marca)} ${esc(VEC.modelo)} (${VEC.ano})</td></tr>
+        <tr><th>Placa</th><td class="mono">${esc(VEC.placa)}</td></tr>
+        <tr><th>Capacidade</th><td>${VEC.capacidade} passageiros</td></tr>
+        <tr><th>KM atual</th><td class="mono">${num(VEC.km).toLocaleString("pt-BR")} km</td></tr>
+      </tbody></table>`:`<div class="empty" style="padding:20px"><div class="muted">Nenhum veículo vinculado.</div></div>`}
+    </div></div>
+    <div class="card"><div class="hd"><h3>Minhas ocorrências</h3></div><div class="bd" style="padding:0">
+    ${ocs.length?`<table><thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th></tr></thead>
+      <tbody>${ocs.map(o=>`<tr><td class="mono">${(o.data||'').split("-").reverse().join("/")}</td><td>${esc(o.tipo||'')}</td><td>${esc(o.descricao||'')}</td></tr>`).join("")}</tbody></table>`
+    :`<div class="empty" style="padding:20px"><div class="muted">Nenhuma ocorrência registrada.</div></div>`}
+    </div></div>`;
 };
 
 /* inicia após tudo declarado */

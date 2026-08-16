@@ -128,6 +128,12 @@
         { id: uid("sol"), empresaId: empB, tipo: "Novo funcionário", descricao: "Incluir Roberto Alves na rota da manhã", data: hoje(), status: "pendente" },
       ],
 
+      // contratos cooperativa ↔ empresa (o que a EMPRESA paga)
+      contratos: [
+        { id: uid("con"), empresaId: empA, numero: "CT-2026-001", modelo: "por_funcionario", valor: 320, dataInicio: "2026-01-01", dataFim: "2026-12-31", status: "ativo", obs: "" },
+        { id: uid("con"), empresaId: empB, numero: "CT-2026-002", modelo: "mensal_fixo", valor: 18000, dataInicio: "2026-02-01", dataFim: "2026-12-31", status: "ativo", obs: "" },
+      ],
+
       viagens: [], // boletins — preenchidos abaixo
       fechamentos: [],
       ocorrencias: [],
@@ -259,6 +265,43 @@
     };
   }
 
+  /* ---------- FATURAMENTO da EMPRESA (o que a empresa paga) ----------
+     Usa os MESMOS boletins, mas números do lado da empresa —
+     nunca a produção/valor do motorista (doc 1, seções 15-16). */
+  const MODELOS_FATURA = {
+    mensal_fixo: "Valor mensal fixo",
+    por_funcionario: "Valor por funcionário",
+    por_viagem: "Valor por viagem",
+    por_km: "Valor por km",
+    por_rota: "Valor por rota",
+  };
+  function contratoAtivo(db, empresaId) {
+    return (db.contratos || []).find((c) => c.empresaId === empresaId && c.status === "ativo") || null;
+  }
+  function faturarEmpresa(db, empresaId, ini, fim, contrato) {
+    contrato = contrato || contratoAtivo(db, empresaId);
+    const viagens = (db.viagens || []).filter(
+      (v) => v.empresaId === empresaId && v.status === "concluida" && v.data >= ini && v.data <= fim
+    );
+    const funcionarios = (db.funcionarios || []).filter((f) => f.empresaId === empresaId && f.status === "ativo").length;
+    const rotas = (db.roteiros || []).filter((r) => r.empresaId === empresaId && r.status === "ativo").length;
+    const kmTotal = viagens.reduce((a, v) => a + num(v.kmRealizado || v.kmPrevisto), 0);
+    const taxa = num(contrato && contrato.valor);
+    const modelo = contrato ? contrato.modelo : null;
+    let qtd = 0, unidade = "";
+    switch (modelo) {
+      case "mensal_fixo": qtd = 1; unidade = "mês (fixo)"; break;
+      case "por_funcionario": qtd = funcionarios; unidade = "funcionário ativo"; break;
+      case "por_viagem": qtd = viagens.length; unidade = "viagem realizada"; break;
+      case "por_km": qtd = kmTotal; unidade = "km rodado"; break;
+      case "por_rota": qtd = rotas; unidade = "rota ativa"; break;
+      default: qtd = 0; unidade = "sem contrato";
+    }
+    const total = modelo === "mensal_fixo" ? taxa : taxa * qtd;
+    return { empresaId, ini, fim, contrato, modelo, modeloLabel: MODELOS_FATURA[modelo] || "—",
+      taxa, qtd, unidade, total, funcionarios, rotas, kmTotal, qtdViagens: viagens.length, viagens };
+  }
+
   /* ============================================================
      API pública
      ============================================================ */
@@ -294,6 +337,9 @@
     custoRota,
     rentabilidade,
     calcularFechamento,
+    faturarEmpresa,
+    contratoAtivo,
+    MODELOS_FATURA,
     uid, hoje, BRL, num,
   };
 
