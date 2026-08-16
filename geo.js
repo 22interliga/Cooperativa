@@ -1,22 +1,24 @@
 /* ============================================================
    CoopVia — geo.js
-   Cálculo de KM real e GRÁTIS:
-     endereço → Nominatim (geocode) → coordenadas → OSRM (rota) → KM
+   Busca de endereço + KM, grátis:
+     endereço → Photon (autocomplete/geocode, OSM) → coordenadas
+              → OSRM (rota) → KM
    ------------------------------------------------------------
-   ⚠ Servidores públicos são DEMO (limitados). Em produção troque
-   os endpoints em Geo.CFG por um OSRM/Nominatim próprio (Docker)
-   ou serviço pago. Política Nominatim: máx 1 requisição/segundo.
+   Photon (photon.komoot.io) é feito para busca-enquanto-digita e
+   é amigável a navegador (CORS liberado). OSRM calcula a distância.
+   ⚠ Servidores públicos são para uso leve/demo. Em produção troque
+   os endpoints em Geo.CFG por servidores próprios (Docker).
    ============================================================ */
 (function (g) {
   "use strict";
 
   const CFG = {
-    // troque estes por seus servidores próprios em produção
-    nominatim: "https://nominatim.openstreetmap.org/search",
+    photon: "https://photon.komoot.io/api/",
     osrm: "https://router.project-osrm.org/route/v1/driving",
-    email: "contato@interliga.app.br", // identifica o app (política Nominatim)
-    countrycodes: "br",
-    delayMs: 1100, // respeita o limite de 1 req/s do Nominatim
+    lang: "default",
+    biasLat: -12.9,   // viés p/ Bahia (Salvador) — resultados locais primeiro
+    biasLng: -38.4,
+    delayMs: 350,
   };
 
   const CACHEKEY = "coopvia:v1:geocache";
@@ -25,8 +27,7 @@
   const norm = (s) => String(s || "").trim().toLowerCase();
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  /* fetch com tempo limite — nunca trava indefinidamente */
-  async function fetchT(url, opts, ms = 12000) {
+  async function fetchT(url, opts, ms = 10000) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), ms);
     try {
@@ -34,29 +35,48 @@
     } finally { clearTimeout(t); }
   }
 
-  /* endereço → {lat,lng,label} | null  (com cache). Lança em falha de rede/HTTP. */
+  function label(p) {
+    const cidade = p.city || p.town || p.village || p.municipality || p.county;
+    const parts = [p.name, p.street && p.name !== p.street ? p.street : null,
+      p.housenumber, cidade, p.state, p.country];
+    const seen = new Set();
+    return parts.filter((x) => x && !seen.has(x) && seen.add(x)).join(", ");
+  }
+
+  async function photon(q, limit = 5) {
+    const url = `${CFG.photon}?q=${encodeURIComponent(q)}&limit=${limit}` +
+      `&lang=${CFG.lang}&lat=${CFG.biasLat}&lon=${CFG.biasLng}`;
+    let res;
+    try {
+      res = await fetchT(url, { headers: { Accept: "application/json" } }, 9000);
+    } catch (e) {
+      throw new Error(e.name === "AbortError" ? "tempo esgotado na busca de endereço" : "sem conexão com o servidor de busca");
+    }
+    if (!res.ok) throw new Error("servidor de busca respondeu " + res.status);
+    const data = await res.json();
+    return (data.features || [])
+      .filter((f) => f.geometry && f.geometry.coordinates)
+      .map((f) => ({ label: label(f.properties || {}), lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0] }));
+  }
+
+  async function suggest(query) {
+    const q = String(query || "").trim();
+    if (q.length < 3) return [];
+    return await photon(q, 5);
+  }
+
   async function geocode(address) {
     const key = norm(address);
     if (!key) return null;
     const cache = cacheGet();
     if (cache[key]) return cache[key];
-    const url = `${CFG.nominatim}?format=json&limit=1&countrycodes=${CFG.countrycodes}` +
-      `&q=${encodeURIComponent(address)}&email=${encodeURIComponent(CFG.email)}`;
-    let res;
-    try {
-      res = await fetchT(url, { headers: { Accept: "application/json" } });
-    } catch (e) {
-      throw new Error(e.name === "AbortError" ? "tempo esgotado ao localizar endereços" : "falha de rede ao localizar endereços");
-    }
-    if (!res.ok) throw new Error("Nominatim respondeu " + res.status + (res.status === 403 || res.status === 429 ? " (limite do servidor público)" : ""));
-    const data = await res.json();
-    if (!data || !data.length) return null; // não encontrado (≠ erro)
-    const pt = { lat: +data[0].lat, lng: +data[0].lon, label: data[0].display_name };
+    const list = await photon(address, 1);
+    if (!list.length) return null;
+    const pt = { lat: list[0].lat, lng: list[0].lng, label: list[0].label };
     cache[key] = pt; cacheSet(cache);
     return pt;
   }
 
-  /* vários endereços em sequência (respeitando 1 req/s; usa cache) */
   async function geocodeMany(addresses) {
     const out = [];
     for (const a of addresses) {
@@ -69,17 +89,16 @@
     return out;
   }
 
-  /* coordenadas → distância OSRM. points:[{lat,lng}] → {km,legs[]} | null */
   async function route(points) {
     const valid = points.filter(Boolean);
     if (valid.length < 2) return null;
-    const coords = valid.map((p) => `${p.lng},${p.lat}`).join(";"); // OSRM = lng,lat
+    const coords = valid.map((p) => `${p.lng},${p.lat}`).join(";");
     const url = `${CFG.osrm}/${coords}?overview=false`;
     let res;
     try {
       res = await fetchT(url);
     } catch (e) {
-      throw new Error(e.name === "AbortError" ? "tempo esgotado no cálculo da rota (OSRM)" : "falha de rede no OSRM");
+      throw new Error(e.name === "AbortError" ? "tempo esgotado no cálculo da rota (OSRM)" : "sem conexão com o OSRM");
     }
     if (!res.ok) throw new Error("OSRM respondeu " + res.status);
     const data = await res.json();
@@ -88,51 +107,17 @@
     return { km: r.distance / 1000, min: r.duration / 60, legs: (r.legs || []).map((l) => l.distance / 1000) };
   }
 
-  /* pipeline completo: lista de endereços → {km, trechos:[{de,para,km}], min} | {erro} */
-  async function calcularRota(enderecos) {
-    const lista = enderecos.map((e) => String(e || "").trim()).filter(Boolean);
-    if (lista.length < 2) return { erro: "Informe pelo menos origem e destino." };
-    let pts;
-    try {
-      pts = await geocodeMany(lista);
-    } catch (e) {
-      return { erro: e.message };
-    }
-    const faltando = lista.filter((_, i) => !pts[i]);
-    if (faltando.length) return { erro: "Endereço não localizado: " + faltando.join(" · ") };
-    let r;
-    try {
-      r = await route(pts);
-    } catch (e) {
-      return { erro: e.message };
-    }
-    if (!r) return { erro: "OSRM não retornou rota para estes pontos." };
-    const trechos = r.legs.map((km, i) => ({ de: lista[i], para: lista[i + 1], km: Math.round(km * 10) / 10 }));
-    return { km: Math.round(r.km * 10) / 10, min: Math.round(r.min), trechos, pts };
-  }
+  async function calcularRota(enderecos) { return calcularRotaPts(enderecos); }
 
-  /* autocomplete: query → até 5 sugestões [{label,lat,lng}] */
-  async function suggest(query) {
-    const q = String(query || "").trim();
-    if (q.length < 4) return [];
-    const url = `${CFG.nominatim}?format=json&limit=5&countrycodes=${CFG.countrycodes}` +
-      `&addressdetails=1&q=${encodeURIComponent(q)}&email=${encodeURIComponent(CFG.email)}`;
-    try {
-      const res = await fetchT(url, { headers: { Accept: "application/json" } }, 8000);
-      if (!res.ok) return [];
-      const data = await res.json();
-      return (data || []).map((d) => ({ label: d.display_name, lat: +d.lat, lng: +d.lon }));
-    } catch (e) { return []; }
-  }
-
-  /* rota a partir de itens que podem ser texto OU {lat,lng,label} já escolhido */
   async function calcularRotaPts(items) {
-    const labels = items.map((it) => (typeof it === "string" ? it : (it.label || "ponto")));
+    const lista = items.map((it) => (typeof it === "string" ? it.trim() : it)).filter((x) => x && (typeof x !== "string" || x.length));
+    if (lista.length < 2) return { erro: "Informe pelo menos origem e destino." };
+    const labels = lista.map((it) => (typeof it === "string" ? it : (it.label || "ponto")));
     const pts = [];
     try {
-      for (const it of items) {
+      for (const it of lista) {
         if (it && typeof it === "object" && it.lat != null) { pts.push(it); }
-        else { pts.push(await geocode(String(it || ""))); await sleep(CFG.delayMs); }
+        else { pts.push(await geocode(String(it))); await sleep(CFG.delayMs); }
       }
     } catch (e) { return { erro: e.message }; }
     const faltando = labels.filter((_, i) => !pts[i]);
@@ -144,6 +129,6 @@
     return { km: Math.round(r.km * 10) / 10, min: Math.round(r.min), trechos, pts };
   }
 
-  g.Geo = { geocode, geocodeMany, route, calcularRota, calcularRotaPts, suggest, CFG,
+  g.Geo = { suggest, geocode, geocodeMany, route, calcularRota, calcularRotaPts, photon, CFG,
     limparCache: () => localStorage.removeItem(CACHEKEY) };
 })(window);
