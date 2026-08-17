@@ -734,12 +734,17 @@ async function calcMapaRoteiro(){
   const r=await Geo.calcularRotaPts(itens);
   btn.disabled=false; btn.textContent=txt;
   if(r.erro){ out.style.borderColor="var(--red)"; out.style.background="#fff"; out.innerHTML="⚠ "+esc(r.erro)+"<br><small class='muted'>Dica: escolha o endereço na lista de sugestões, ou inclua cidade e UF (ex.: “Candeias BA”). Você também pode digitar o KM manualmente.</small>"; return; }
-  out.style.borderColor="var(--amber)"; out.style.background="var(--amber-soft)";
+  const LIMITE_KM = 150; // rotas reais vão até ~100 km — acima disso, provável erro de endereço
+  const suspeito = r.km > LIMITE_KM;
   $("#r_km").value=r.km; previewRoteiro();
-  window.__rotResolved = r.pts; // guarda p/ salvar coords
+  window.__rotResolved = r.pts;
+  out.style.borderColor = suspeito ? "var(--red)" : "var(--amber)";
+  out.style.background  = suspeito ? "#fdeaea" : "var(--amber-soft)";
   const trechos=r.trechos.map(t=>`<div class="row" style="font-size:12px"><span>${esc(t.de)} → ${esc(t.para)}</span><span class="spacer"></span><b class="mono">${t.km} km</b></div>`).join("");
-  out.innerHTML=`${trechos}<div class="divide" style="margin:8px 0"></div><div class="row"><b>Total da rota</b><span class="spacer"></span><b class="money-lg" style="font-size:16px">${r.km} km</b> <span class="muted">· ~${r.min} min</span></div>`;
-  toast("KM calculado pelo mapa");
+  const locais=(r.pts||[]).map(p=>`<div class="muted" style="font-size:11px">• ${esc(p.label||'—')}</div>`).join("");
+  const aviso = suspeito ? `<div style="color:var(--red);font-weight:700;font-size:12.5px;margin-bottom:8px">⚠ Distância acima do esperado (${r.km} km). Provável erro de endereço — confira abaixo onde cada ponto caiu. Escolha o endereço pela lista de sugestões ou inclua cidade e UF.</div>` : "";
+  out.innerHTML=`${aviso}${trechos}<div class="divide" style="margin:8px 0"></div><div class="row"><b>Total da rota</b><span class="spacer"></span><b class="money-lg" style="font-size:16px">${r.km} km</b> <span class="muted">· ~${r.min} min</span></div><div class="divide" style="margin:8px 0"></div><div class="muted" style="font-size:11px;margin-bottom:4px">Endereços localizados no mapa:</div>${locais}`;
+  toast(suspeito ? "Distância suspeita — confira os endereços" : "KM calculado pelo mapa", suspeito ? "err" : "ok");
 }
 function salvarRoteiro(id){
   const o = id ? db.roteiros.find(x=>x.id===id) : { id:DB.uid("rot"), estacionamentoPadrao:0, idaVolta:false, obs:"" };
