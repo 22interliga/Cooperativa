@@ -291,7 +291,12 @@
     let qtd = 0, unidade = "";
     switch (modelo) {
       case "mensal_fixo": qtd = 1; unidade = "mês (fixo)"; break;
-      case "por_funcionario": qtd = funcionarios; unidade = "funcionário ativo"; break;
+      case "por_funcionario": {
+        const qc = num(contrato && contrato.qtdContratada);
+        qtd = qc > 0 ? qc : funcionarios;
+        unidade = qc > 0 ? "funcionário (contratado)" : "funcionário ativo";
+        break;
+      }
       case "por_viagem": qtd = viagens.length; unidade = "viagem realizada"; break;
       case "por_km": qtd = kmTotal; unidade = "km rodado"; break;
       case "por_rota": qtd = rotas; unidade = "rota ativa"; break;
